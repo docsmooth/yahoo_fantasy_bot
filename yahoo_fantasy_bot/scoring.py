@@ -182,6 +182,7 @@ def score_dataframe(
     k: float = 20.0,
     projected_games: int = 82,
     compute_per_game: bool = True,
+    goalie_method: str = "gp-fallback",
     weights: Optional[Mapping[str, float]] = None,
 ) -> pd.DataFrame:
     """Score a DataFrame of players and return augmented DataFrame.
@@ -235,11 +236,11 @@ def score_dataframe(
 
     if compute_per_game:
         # per-game
-        # For goalies: if goalie-specific counting stats (W, SV, GA, SO) were
-        # present and contributed to raw_score, prefer computing per_game from
-        # the goalie raw_score rather than the skater raw_score fallback. We
-        # can detect presence by checking whether any goalie alias columns had
-        # non-null values in the row.
+    # For goalies: allow multiple strategies selected via `goalie_method`:
+    # - 'stats': use goalie raw_score-derived per_game when goalie stats present
+    # - 'gp-fallback': use GP-aware fallback scaled from goalie_mean (default)
+    # - 'constant': use a constant DEFAULT_GOALIE_PER_GAME when stats missing
+    # The `goalie_method` parameter controls that behavior.
         def _per_game_row(r):
             gp = float(r.get("gp") or 0.0)
             # detect goalie stat presence
@@ -251,11 +252,16 @@ def score_dataframe(
                         break
                 if goalie_stats_present:
                     break
-            if r.get("is_goalie") and goalie_stats_present:
-                # use goalie raw_score per-game
+            if not r.get("is_goalie"):
                 return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
-            # default: raw_score / gp
-            return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
+
+            # If goalie and 'stats' method selected and goalie stats present,
+            # compute per_game from goalie raw_score.
+            if goalie_method == 'stats' and goalie_stats_present:
+                return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
+
+            # For other goalie methods we'll compute per_game later via fallbacks
+            return 0.0
 
         df["per_game"] = df.apply(_per_game_row, axis=1)
 
@@ -300,32 +306,38 @@ def score_dataframe(
         # assign fallback per_game to goalies that have per_game == 0
         mask_goalie_zero = (df["is_goalie"]) & (df["per_game"] == 0)
         if mask_goalie_zero.any():
-            # compute average GP among goalies (use >0 GPs when available)
-            try:
-                goalie_gps = df.loc[df["is_goalie"], "gp"].astype(float)
-                avg_goalie_gp = float(goalie_gps[goalie_gps > 0].mean()) if (goalie_gps > 0).any() else 0.0
-            except Exception:
-                avg_goalie_gp = 0.0
+            if goalie_method == 'constant':
+                df.loc[mask_goalie_zero, "per_game"] = float(goalie_mean)
+            elif goalie_method == 'gp-fallback':
+                # compute average GP among goalies (use >0 GPs when available)
+                try:
+                    goalie_gps = df.loc[df["is_goalie"], "gp"].astype(float)
+                    avg_goalie_gp = float(goalie_gps[goalie_gps > 0].mean()) if (goalie_gps > 0).any() else 0.0
+                except Exception:
+                    avg_goalie_gp = 0.0
 
-            # We'll vary the fallback per-game slightly based on a player's GP
-            # so goalies with more playing time get modestly higher projections.
-            # factor = 1 + scale * (gp - avg_gp) / avg_gp, clipped to [0.5, 2.0]
-            scale = 0.2
-            def _goalie_fallback_val(r):
-                gp = float(r.get("gp") or 0.0)
-                if avg_goalie_gp and avg_goalie_gp > 0:
-                    factor = 1.0 + scale * ((gp - avg_goalie_gp) / avg_goalie_gp)
-                else:
-                    factor = 1.0
-                # clip
-                if factor < 0.5:
-                    factor = 0.5
-                if factor > 2.0:
-                    factor = 2.0
-                return float(goalie_mean) * factor
+                # We'll vary the fallback per-game slightly based on a player's GP
+                # so goalies with more playing time get modestly higher projections.
+                # factor = 1 + scale * (gp - avg_gp) / avg_gp, clipped to [0.5, 2.0]
+                scale = 0.2
+                def _goalie_fallback_val(r):
+                    gp = float(r.get("gp") or 0.0)
+                    if avg_goalie_gp and avg_goalie_gp > 0:
+                        factor = 1.0 + scale * ((gp - avg_goalie_gp) / avg_goalie_gp)
+                    else:
+                        factor = 1.0
+                    # clip
+                    if factor < 0.5:
+                        factor = 0.5
+                    if factor > 2.0:
+                        factor = 2.0
+                    return float(goalie_mean) * factor
 
-            # apply per-row fallback
-            df.loc[mask_goalie_zero, "per_game"] = df.loc[mask_goalie_zero].apply(_goalie_fallback_val, axis=1)
+                # apply per-row fallback
+                df.loc[mask_goalie_zero, "per_game"] = df.loc[mask_goalie_zero].apply(_goalie_fallback_val, axis=1)
+            else:
+                # unknown method: fallback to constant
+                df.loc[mask_goalie_zero, "per_game"] = float(goalie_mean)
 
         # Ensure goalie shrunk_per_game matches per_game after any fallback
         # (goalies are exempt from shrinkage, so their shrunk_per_game should
@@ -375,6 +387,7 @@ def score_multiple_files(
     projected_games: int = 82,
     k: float = 20.0,
     compute_per_game: bool = True,
+    goalie_method: str = "gp-fallback",
     weights: Optional[Mapping[str, float]] = None,
 ):
     """Read multiple QuantHockey-style files and combine scores with decaying weights.
@@ -399,7 +412,7 @@ def score_multiple_files(
             df = pd.read_excel(path, sheet_name=sheet_name, header=header)
         except Exception as e:
             raise
-        scored = score_dataframe(df, k=k, projected_games=projected_games, compute_per_game=compute_per_game, weights=weights)
+        scored = score_dataframe(df, k=k, projected_games=projected_games, compute_per_game=compute_per_game, goalie_method=goalie_method, weights=weights)
         # keep key, gp, shrunk_per_game, projected_total, raw_score
         cols_to_keep = [key_name, "gp", "shrunk_per_game", "projected_total", "raw_score"]
         if "yahoo_score" in scored.columns:

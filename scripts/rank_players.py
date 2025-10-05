@@ -28,6 +28,7 @@ def main(argv=None):
     p.add_argument("--decay", type=float, default=0.5, help="Decay factor for multi-file weighting (0<decay<=1)")
     p.add_argument("--sort-by", choices=['name','mtime'], default='mtime', help="How to sort discovered input files")
     p.add_argument("--reverse", action='store_true', help="Reverse the discovered file order after sorting (useful when you prefer lexicographic newest-first)")
+    p.add_argument("--goalie-method", choices=['stats','gp-fallback','constant'], default='gp-fallback', help="Goalie projection method when goalie stats are missing or present")
     p.add_argument("--no-per-game", dest='compute_per_game', action='store_false', help="Disable per-game computations and use raw totals for projections")
     p.set_defaults(compute_per_game=True)
     p.add_argument("--weight-by-games", dest='weight_by_games', action='store_true', help="Multiply per-file contributions by games played (default)")
@@ -77,6 +78,7 @@ def main(argv=None):
         k=args.k,
         normalize_file_weights=args.normalize_file_weights,
         compute_per_game=args.compute_per_game,
+        goalie_method=args.goalie_method,
     )
 
     # Optionally fetch Yahoo points via API
