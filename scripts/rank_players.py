@@ -115,7 +115,11 @@ def main(argv=None):
         yahoo_col = yahoo_cols[0]
         # find matching combined/our score column
         our_col = "combined_ranking_score" if "combined_ranking_score" in scored.columns else "ranking_score"
-        report_df = scored[["Name", "Team", our_col, yahoo_col]].copy()
+        # handle missing Team column gracefully
+        cols_for_report = ["Name", our_col, yahoo_col]
+        if "Team" in scored.columns:
+            cols_for_report.insert(1, "Team")
+        report_df = scored[cols_for_report].copy()
         report_df = report_df.rename(columns={our_col: "our_score", yahoo_col: "yahoo_score"})
         report_df["delta"] = report_df["our_score"] - report_df["yahoo_score"]
         report_path = Path("yahoo_comparison.csv")
