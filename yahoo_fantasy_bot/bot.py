@@ -335,6 +335,33 @@ class ManagerBot:
         if self.ppool is None:
             plyr_pool = self.fetch_free_agents() + self.fetch_cur_lineup()
             self.ppool = self._call_predict(plyr_pool, fail_on_missing=False)
+            # If a scored CSV was generated (via scripts/ybot --score), merge
+            # the scored columns into the player pool so the scoring info can
+            # be used in roster decisions.
+            try:
+                scored_path = None
+                if 'Scoring' in self.cfg and 'scored_csv' in self.cfg['Scoring']:
+                    scored_path = self.cfg['Scoring']['scored_csv']
+                if scored_path and os.path.exists(scored_path):
+                    scored_df = pd.read_csv(scored_path)
+                    # Prefer 'Name' as the join key; normalize column case
+                    scored_df = scored_df.rename(columns={c: c for c in scored_df.columns})
+                    # merge on Name; left join keeps our pool rows
+                    # select relevant columns if present
+                    score_cols = [c for c in ['combined_projected_total', 'combined_shrunk_per_game'] if c in scored_df.columns]
+                    if score_cols:
+                        merged = pd.merge(self.ppool, scored_df[['Name'] + score_cols], left_on='name', right_on='Name', how='left')
+                        # drop the duplicate Name column from scored merge
+                        if 'Name' in merged.columns:
+                            merged = merged.drop(columns=['Name'])
+                        # fill NaN scores with zeros
+                        for sc in score_cols:
+                            if sc in merged.columns:
+                                merged[sc] = pd.to_numeric(merged[sc], errors='coerce').fillna(0.0)
+                        self.ppool = merged
+            except Exception:
+                # non-fatal: proceed without scored columns
+                pass
             self._filter_excluded_players()
 
     def fetch_free_agents(self):

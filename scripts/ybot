@@ -3,7 +3,7 @@
 """A bot that acts as a manager for Yahoo! fantasy team
 
 Usage:
-  ybot [-ayfri] [-g x] <cfg_file>
+    ybot [-ayfri] [-g x] [--score] [--scoring-params=<opts>] [--goalie-method=<m>] [--sort-by=<s>] [--reverse] [--decay=<d>] [--no-per-game] <cfg_file>
 
   <cfg_file>  The name of the configuration file.  See sample_config.ini for
               the format.
@@ -17,15 +17,23 @@ Options:
                       can potentially add a lot of churn to your lineup.  The
                       alternative is to just consider optimizing the open slots
                       in the lineup and the bench.
-  -g, --generations=x Number of generations to do during lineup optimization.
+    -g, --generations=x Number of generations to do during lineup optimization.
                       The more generations, the more combinations of lineups we
                       will evaluate.
-  -r, --resetcache    Remove any cache files before starting program.  This is
+    -r, --resetcache    Remove any cache files before starting program.  This is
                       necessary if you changed the source of prediction stats in
                       the config file.
   -i, --ignorestatus  When constructing the lineup, ignore status other than IL.
                       This will allow the bot to pick players that are DTD/NA
                       for the starting lineup.
+    --score             Run the scoring script (`scripts/rank_players.py`) before
+                                            running the bot and make scored CSV available to the bot.
+    --scoring-params=<opts> Quoted options to pass to `scripts/rank_players.py`.
+    --goalie-method=<m> Goalies scoring method: stats|gp-fallback|constant. Overrides scoring default when --score is used.
+    --sort-by=<s>       How to sort input files for scoring: name|mtime. Passed to scoring when --score is used.
+    --reverse           Reverse the sort order when discovering input files for scoring.
+    --decay=<d>         Decay factor to pass to scoring (float between 0 and 1).
+    --no-per-game       Disable per-game computation in scoring; useful when you want raw totals only.
 
 """
 from docopt import docopt
@@ -34,6 +42,8 @@ import logging
 import os
 import pandas as pd
 import configparser
+import subprocess
+import shlex
 
 
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -68,4 +78,40 @@ if __name__ == '__main__':
     auto = automation.Driver(cfg, not args['--apply'], args['--full'],
                              not args['--assumeyes'], args['--resetcache'],
                              args['--ignorestatus'])
+    # Optionally run the scoring script and expose the scored CSV to the bot
+    if args.get('--score'):
+        # default output
+        out_path = 'scored_players.csv'
+
+        # Build argument list for rank_players.py. Prefer explicit flags.
+        cmd_parts = [os.environ.get('PYTHON', 'python'), 'scripts/rank_players.py', '--out', out_path]
+
+        # Map our new first-class options to rank_players flags
+        if args.get('--goalie-method'):
+            cmd_parts += ['--goalie-method', args.get('--goalie-method')]
+        if args.get('--sort-by'):
+            cmd_parts += ['--sort-by', args.get('--sort-by')]
+        if args.get('--reverse'):
+            cmd_parts += ['--reverse']
+        if args.get('--decay'):
+            cmd_parts += ['--decay', args.get('--decay')]
+        if args.get('--no-per-game'):
+            cmd_parts += ['--no-per-game']
+
+        # Backward compatible: allow --scoring-params (new) or --score-opts (old) quoted string to append extra flags
+        score_opts = args.get('--scoring-params') or args.get('--scoring-opts') or ''
+        if score_opts:
+            # Split and extend
+            cmd_parts += shlex.split(score_opts)
+
+        print('Running scoring command:', ' '.join(cmd_parts))
+        try:
+            proc = subprocess.run(cmd_parts, check=True, capture_output=True)
+            print(proc.stdout.decode())
+            cfg['Scoring'] = cfg.get('Scoring', {})
+            cfg['Scoring']['scored_csv'] = out_path
+        except subprocess.CalledProcessError as e:
+            print('Scoring command failed:')
+            print(e.stdout.decode())
+            print(e.stderr.decode())
     auto.run()
