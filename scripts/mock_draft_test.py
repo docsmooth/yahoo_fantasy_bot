@@ -42,6 +42,10 @@ def main(argv=None):
     p.add_argument('--top-teams', type=int, default=10)
     p.add_argument('--rounds', type=int, default=15)
     p.add_argument('--out', default='mock_draft_results.csv')
+    p.add_argument('--decay', type=float, default=0.5, help='Decay factor for multi-file weighting (0<decay<=1)')
+    p.add_argument('--weight-by-games', dest='weight_by_games', action='store_true', help='Multiply per-file contributions by games played (default)')
+    p.add_argument('--no-weight-by-games', dest='weight_by_games', action='store_false', help='Do not weight per-file contributions by games played')
+    p.set_defaults(weight_by_games=True)
     args = p.parse_args(argv)
 
     # Use the existing runner behavior to get scored players
@@ -49,7 +53,7 @@ def main(argv=None):
     if not files:
         print('No data files found in data/ to run draft simulation')
         return 1
-    scored = scoring.score_multiple_files([str(p) for p in files])
+    scored = scoring.score_multiple_files([str(p) for p in files], decay=args.decay, weight_by_games=args.weight_by_games)
     draft_df = simulate_snake_draft(scored, num_teams=args.top_teams, rounds=args.rounds)
     draft_df.to_csv(args.out, index=False)
     print(f'Wrote mock draft results to {args.out}')

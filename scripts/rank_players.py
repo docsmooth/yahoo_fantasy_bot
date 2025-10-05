@@ -25,6 +25,12 @@ def main(argv=None):
     p.add_argument("--top", type=int, default=20)
     p.add_argument("--projected-games", type=int, default=82)
     p.add_argument("--k", type=float, default=20.0, help="Shrinkage prior weight")
+    p.add_argument("--decay", type=float, default=0.5, help="Decay factor for multi-file weighting (0<decay<=1)")
+    p.add_argument("--weight-by-games", dest='weight_by_games', action='store_true', help="Multiply per-file contributions by games played (default)")
+    p.add_argument("--no-weight-by-games", dest='weight_by_games', action='store_false', help="Do not weight per-file contributions by games played")
+    p.set_defaults(weight_by_games=True)
+    p.add_argument("--yahoo-points-field", default=None, help="When fetching Yahoo points, prefer this stat key (e.g. PPT, total_points)")
+    p.add_argument("--fuzzy-match", type=float, default=0.0, help="Enable fuzzy name matching threshold (0-100); 0 disables fuzzy matching")
     p.add_argument("--fetch-yahoo", action='store_true', help="Attempt to fetch Yahoo Y! points via API (requires --league-id and oauthFile in config)")
     p.add_argument("--league-id", default=None, help="Yahoo league id to fetch yahoo points for (required when --fetch-yahoo is used)")
     p.add_argument("--oauth-file", default="oauth2.json", help="Path to yahoo oauth2 json file")
@@ -46,7 +52,7 @@ def main(argv=None):
 
     print(f"Using files (newest-first): {[str(p) for p in files]}")
     print("Scoring players from multiple files (decay=0.5, weight_by_games=True)...")
-    scored = scoring.score_multiple_files([str(p) for p in files], sheet_name=args.sheet, decay=0.5, weight_by_games=True, projected_games=args.projected_games, k=args.k)
+    scored = scoring.score_multiple_files([str(p) for p in files], sheet_name=args.sheet, decay=args.decay, weight_by_games=args.weight_by_games, projected_games=args.projected_games, k=args.k)
 
     # Optionally fetch Yahoo points via API
     if args.fetch_yahoo:
@@ -63,9 +69,36 @@ def main(argv=None):
         lg = yfa.League(sc, args.league_id)
         names = scored['Name'].dropna().unique().tolist()
         print(f"Fetching Yahoo points for {len(names)} players from league {args.league_id}...")
-        ydf = scoring.fetch_yahoo_points_for_names(lg, names, req_type='season')
+        ydf = scoring.fetch_yahoo_points_for_names(lg, names, req_type='season', prefer_field=(args.yahoo_points_field or 'PPT'))
         # merge yahoo points into scored (match on Name)
-        scored = scored.merge(ydf.rename(columns={'name': 'Name', 'yahoo_points': 'yahoo_score'}), on='Name', how='left')
+        # optionally perform fuzzy matching when merging
+        if args.fuzzy_match and args.fuzzy_match > 0.0:
+            try:
+                from rapidfuzz import process as rf_process
+                from rapidfuzz import utils as rf_utils
+                print('Using rapidfuzz for fuzzy name matching')
+                # build mapping from ydf.name -> yahoo_points
+                ymap = dict(zip(ydf['name'].fillna('').tolist(), ydf['yahoo_points'].tolist()))
+                names_list = list(ymap.keys())
+                matched = []
+                thresh = args.fuzzy_match
+                for idx, row in scored.iterrows():
+                    n = row.get('Name') or ''
+                    if n in ymap:
+                        matched.append(ymap[n])
+                        continue
+                    # find best match
+                    best = rf_process.extractOne(n, names_list)
+                    if best and best[1] >= thresh:
+                        matched.append(ymap.get(best[0]))
+                    else:
+                        matched.append(None)
+                scored['yahoo_score'] = matched
+            except Exception:
+                print('rapidfuzz not available; falling back to exact merges')
+                scored = scored.merge(ydf.rename(columns={'name': 'Name', 'yahoo_points': 'yahoo_score'}), on='Name', how='left')
+        else:
+            scored = scored.merge(ydf.rename(columns={'name': 'Name', 'yahoo_points': 'yahoo_score'}), on='Name', how='left')
 
     out_path = Path(args.out)
     # select useful columns for the CSV; prefer original name column plus computed columns
