@@ -200,8 +200,14 @@ class GeneticAlgorithm:
         self.logger.info(f"Setting up player selection of {len(self.ppool.index)} players")
         selector = roster.PlayerSelector(self.ppool)
         if gen_type == 'pct_own':
-            selector.set_descending_categories([])
-            selector.rank(['percent_owned'])
+            # If scoring produced a combined_projected_total column, prefer that
+            # as the ranking metric so the optimizer biases towards our projections.
+            if 'combined_projected_total' in self.ppool.columns:
+                selector.set_descending_categories([])
+                selector.rank(['combined_projected_total'])
+            else:
+                selector.set_descending_categories([])
+                selector.rank(['percent_owned'])
         else:
             assert(gen_type == 'random')
             selector.shuffle()
@@ -422,7 +428,7 @@ class GeneticAlgorithm:
                 return rcont
         raise RuntimeError(
             "Walked all of the players but couldn't create a lineup.  Have "
-            "{} players".format(len(lineup)))
+            "{} players".format(len(ppool)))
 
     def _mutate(self):
         """
