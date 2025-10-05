@@ -235,7 +235,29 @@ def score_dataframe(
 
     if compute_per_game:
         # per-game
-        df["per_game"] = df.apply(lambda r: (r["raw_score"] / r["gp"]) if r["gp"] and r["gp"] > 0 else 0.0, axis=1)
+        # For goalies: if goalie-specific counting stats (W, SV, GA, SO) were
+        # present and contributed to raw_score, prefer computing per_game from
+        # the goalie raw_score rather than the skater raw_score fallback. We
+        # can detect presence by checking whether any goalie alias columns had
+        # non-null values in the row.
+        def _per_game_row(r):
+            gp = float(r.get("gp") or 0.0)
+            # detect goalie stat presence
+            goalie_stats_present = False
+            for alias_list in ("W", "GA", "SV", "SO"):
+                for c in _GOALIE_ALIASES.get(alias_list, ()):  # type: ignore[index]
+                    if c in r and pd.notna(r[c]):
+                        goalie_stats_present = True
+                        break
+                if goalie_stats_present:
+                    break
+            if r.get("is_goalie") and goalie_stats_present:
+                # use goalie raw_score per-game
+                return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
+            # default: raw_score / gp
+            return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
+
+        df["per_game"] = df.apply(_per_game_row, axis=1)
 
         # league mean per game (exclude zeros to avoid bias from players with no GP)
         nonzero = df["gp"] > 0

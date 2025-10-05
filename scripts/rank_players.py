@@ -26,6 +26,8 @@ def main(argv=None):
     p.add_argument("--projected-games", type=int, default=82)
     p.add_argument("--k", type=float, default=20.0, help="Shrinkage prior weight")
     p.add_argument("--decay", type=float, default=0.5, help="Decay factor for multi-file weighting (0<decay<=1)")
+    p.add_argument("--sort-by", choices=['name','mtime'], default='mtime', help="How to sort discovered input files")
+    p.add_argument("--reverse", action='store_true', help="Reverse the discovered file order after sorting (useful when you prefer lexicographic newest-first)")
     p.add_argument("--no-per-game", dest='compute_per_game', action='store_false', help="Disable per-game computations and use raw totals for projections")
     p.set_defaults(compute_per_game=True)
     p.add_argument("--weight-by-games", dest='weight_by_games', action='store_true', help="Multiply per-file contributions by games played (default)")
@@ -48,7 +50,18 @@ def main(argv=None):
         files = [Path(args.input)]
     else:
         if data_dir.exists() and data_dir.is_dir():
-            files = sorted(list(data_dir.glob("*.xlsx")), key=lambda p: p.stat().st_mtime, reverse=True)
+            paths = list(data_dir.glob("*.xlsx"))
+            if args.sort_by == 'name':
+                paths = sorted(paths, key=lambda p: p.name)
+            else:
+                paths = sorted(paths, key=lambda p: p.stat().st_mtime)
+            if args.reverse:
+                paths = list(reversed(paths))
+            else:
+                # default behavior: newest-first by mtime
+                if args.sort_by == 'mtime':
+                    paths = list(reversed(paths))
+            files = paths
     if not files:
         print("No input files found in data/ and --input not provided.")
         return 2
