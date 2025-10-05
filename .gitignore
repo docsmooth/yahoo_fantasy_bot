@@ -10,7 +10,7 @@ anaconda-project-local.yml
 *.pkl
 *.log
 .ropeproject
-*.csv
+ranked_players.csv
 *.cfg
 tags
 .vscode/
