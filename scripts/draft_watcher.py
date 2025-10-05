@@ -10,6 +10,8 @@ import time
 import subprocess
 import sys
 from datetime import datetime
+from yahoo_fantasy_bot import utils
+import os
 
 try:
     from yahoo_oauth import OAuth2
@@ -33,16 +35,63 @@ def notify_gui(summary, body):
         pass
 
 
-def resolve_player_name(league, player_id):
-    try:
-        details = league.player_details(int(player_id))
-        if isinstance(details, list) and len(details) > 0:
-            return details[0].get('name', {}).get('full') or details[0].get('name')
-        elif isinstance(details, dict):
-            return details.get('name', {}).get('full') or details.get('name')
-    except Exception:
-        return str(player_id)
-    return str(player_id)
+def resolve_player_names_batch(league, ids, cache):
+    """Resolve a list of player IDs to names using cache + Yahoo as fallback.
+
+    ids: iterable of ints
+    cache: PlayerDetailsCache instance
+    returns: dict id -> name
+    """
+    ids = [int(i) for i in ids]
+    result = {}
+    missing = []
+    for pid in ids:
+        cached = cache.get(pid)
+        if cached:
+            # cached may be a dict with nested 'name' structure
+            if isinstance(cached, dict):
+                name = cached.get('name')
+                if isinstance(name, dict):
+                    name = name.get('full') or name.get('full')
+                result[pid] = name or str(pid)
+            else:
+                result[pid] = str(cached)
+        else:
+            missing.append(pid)
+
+    # Fetch missing in chunks using player_details (max 25 per call)
+    if missing:
+        for i in range(0, len(missing), 25):
+            chunk = missing[i:i+25]
+            try:
+                details = league.player_details(chunk)
+            except Exception as e:
+                # On error, fallback to IDs
+                for pid in chunk:
+                    result[pid] = str(pid)
+                continue
+
+            # player_details may return a list in same order as chunk
+            mapping = {}
+            for d in details:
+                pid = int(d.get('player_id') or d.get('player_key', '').split('.')[-1])
+                mapping[pid] = d
+                # extract name
+                name = None
+                if isinstance(d.get('name'), dict):
+                    name = d['name'].get('full') or d['name'].get('full')
+                elif isinstance(d.get('name'), str):
+                    name = d.get('name')
+                result[pid] = name or str(pid)
+
+            # update cache and save
+            try:
+                cache.update_many(mapping)
+                cache.save()
+            except Exception:
+                pass
+
+    return result
 
 
 def main():
@@ -57,6 +106,11 @@ def main():
 
     sc = OAuth2(None, None, from_file=args.oauth_file)
     lg = yfa.League(sc, args.league_id)
+
+    # Setup a simple player details cache in repo .cache/player_details-<league>.pkl
+    cache_dir = os.path.join('.cache')
+    cache_file = os.path.join(cache_dir, f'player_details-{args.league_id}.pkl')
+    player_cache = utils.PlayerDetailsCache(cache_file)
 
     last_seen = args.since_pick
     notify_cli(f"Starting draft watcher for {args.league_id}, polling every {args.interval}s")
@@ -80,7 +134,9 @@ def main():
                 team = pck.get('team_key')
                 pid = pck.get('player_id')
                 if args.resolve_names and pid is not None:
-                    name = resolve_player_name(lg, pid)
+                    # resolve via cache (single id path uses batch helper for simplicity)
+                    mapping = resolve_player_names_batch(lg, [pid], player_cache)
+                    name = mapping.get(int(pid), str(pid))
                 else:
                     # sometimes the API returns a nested player_key instead of player_id
                     name = str(pid)

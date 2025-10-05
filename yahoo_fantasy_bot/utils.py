@@ -104,3 +104,46 @@ class LeagueCache(CacheBase):
         for fn in [self.statics()]:
             if os.path.exists(fn):
                 os.remove(fn)
+
+
+class PlayerDetailsCache(object):
+    """Simple file-backed cache for player details keyed by player_id.
+
+    Stores a dict {player_id: details} in a pickle file. Provides get() and
+    update_many() helpers to reduce API calls.
+    """
+    def __init__(self, cache_file):
+        self.cache_file = cache_file
+        self._load()
+
+    def _load(self):
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'rb') as f:
+                    self.data = pickle.load(f)
+            else:
+                self.data = {}
+        except Exception:
+            self.data = {}
+
+    def get(self, player_id):
+        return self.data.get(int(player_id))
+
+    def set(self, player_id, details):
+        self.data[int(player_id)] = details
+
+    def update_many(self, mapping):
+        """mapping: dict(player_id -> details)
+        """
+        for k, v in mapping.items():
+            self.data[int(k)] = v
+
+    def save(self):
+        try:
+            ddir = os.path.dirname(self.cache_file)
+            if ddir and not os.path.exists(ddir):
+                os.makedirs(ddir, exist_ok=True)
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.data, f)
+        except Exception:
+            pass
