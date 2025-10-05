@@ -98,6 +98,8 @@ def main():
     p = argparse.ArgumentParser(description='Watch Yahoo league draft and notify on new picks')
     p.add_argument('--league-id', required=True, help='League id (e.g. nhl.l.2354566)')
     p.add_argument('--oauth-file', required=True, help='Path to oauth2.json')
+    p.add_argument('--use-bot', action='store_true', help='Instantiate the main ManagerBot and reuse its cache paths')
+    p.add_argument('--config', help='Path to config (my.cfg) to pass to ManagerBot when --use-bot is set')
     p.add_argument('--interval', type=int, default=15, help='Polling interval in seconds')
     p.add_argument('--use-gui', action='store_true', help='Use desktop notifications via notify-send')
     p.add_argument('--since-pick', type=int, default=0, help='Start reporting after this pick number')
@@ -105,10 +107,31 @@ def main():
     args = p.parse_args()
 
     sc = OAuth2(None, None, from_file=args.oauth_file)
-    lg = yfa.League(sc, args.league_id)
 
-    # Setup a simple player details cache in repo .cache/player_details-<league>.pkl
     cache_dir = os.path.join('.cache')
+    # Optionally instantiate ManagerBot to reuse its cache dir
+    if args.use_bot:
+        if not args.config:
+            print("--use-bot requires --config <path-to-my.cfg>")
+            sys.exit(1)
+        # Lazy import to avoid pulling bot deps when not requested
+        from configparser import ConfigParser
+        cfg = ConfigParser()
+        cfg.read(args.config)
+        try:
+            from yahoo_fantasy_bot.bot import ManagerBot
+            bot_inst = ManagerBot(cfg, reset_cache=False, ignore_status=True)
+            lg = bot_inst.lg
+            # try to reuse bot cache dir
+            cache_dir = cfg['Cache'].get('dir', cache_dir)
+        except Exception as e:
+            notify_cli(f"Failed to instantiate ManagerBot: {e}")
+            # fall back to direct League
+            lg = yfa.League(sc, args.league_id)
+    else:
+        lg = yfa.League(sc, args.league_id)
+
+    # Setup a simple player details cache file
     cache_file = os.path.join(cache_dir, f'player_details-{args.league_id}.pkl')
     player_cache = utils.PlayerDetailsCache(cache_file)
 
