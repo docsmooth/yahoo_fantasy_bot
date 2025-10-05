@@ -128,23 +128,48 @@ def main():
             # Sort by pick number to ensure order
             new_picks.sort(key=lambda x: int(x['pick']))
 
-            for pck in new_picks:
-                pick_num = int(pck.get('pick'))
-                rnd = pck.get('round')
-                team = pck.get('team_key')
-                pid = pck.get('player_id')
-                if args.resolve_names and pid is not None:
-                    # resolve via cache (single id path uses batch helper for simplicity)
-                    mapping = resolve_player_names_batch(lg, [pid], player_cache)
-                    name = mapping.get(int(pid), str(pid))
-                else:
-                    # sometimes the API returns a nested player_key instead of player_id
-                    name = str(pid)
-                msg = f"Pick {pick_num} (R{rnd}) {team}: {name}"
-                notify_cli(msg)
-                if args.use_gui:
-                    notify_gui(f"Draft Pick {pick_num}", msg)
-                last_seen = max(last_seen, pick_num)
+            if new_picks:
+                # Collect all player IDs that we need to resolve
+                pids = []
+                for pck in new_picks:
+                    pid = pck.get('player_id')
+                    if pid is not None:
+                        pids.append(int(pid))
+
+                resolved = {}
+                if args.resolve_names and len(pids) > 0:
+                    # Batch-resolve all missing ids using the cache helper
+                    resolved = resolve_player_names_batch(lg, pids, player_cache)
+
+                # Append picks to a CSV log and notify
+                logs_dir = os.path.join('logs')
+                os.makedirs(logs_dir, exist_ok=True)
+                log_file = os.path.join(logs_dir, f'draft-{args.league_id}.csv')
+                write_header = not os.path.exists(log_file)
+                with open(log_file, 'a', encoding='utf-8') as lf:
+                    if write_header:
+                        lf.write('timestamp,pick,round,team_key,player_id,player_name\n')
+
+                    for pck in new_picks:
+                        pick_num = int(pck.get('pick'))
+                        rnd = pck.get('round')
+                        team = pck.get('team_key')
+                        pid = pck.get('player_id')
+                        if args.resolve_names and pid is not None:
+                            name = resolved.get(int(pid), str(pid))
+                        else:
+                            name = str(pid)
+
+                        msg = f"Pick {pick_num} (R{rnd}) {team}: {name}"
+                        notify_cli(msg)
+                        if args.use_gui:
+                            notify_gui(f"Draft Pick {pick_num}", msg)
+
+                        # write to CSV
+                        ts = datetime.now().isoformat()
+                        lf.write(f'"{ts}",{pick_num},{rnd},"{team}",{pid},"{name}"\n')
+
+                        last_seen = max(last_seen, pick_num)
 
             time.sleep(max(1, args.interval))
     except KeyboardInterrupt:
