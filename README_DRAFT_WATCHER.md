@@ -12,6 +12,15 @@ Run from the repo root (use the virtualenv python):
 ./env/bin/python scripts/draft_watcher.py --league-id nhl.l.2354566 --oauth-file oauth2.json --interval 10 --use-gui --resolve-names
 ```
 
+Example: run ranking CLI
+-----------------------
+
+You can run the ranking CLI from the same repo to compute scores and export a CSV. Example with per-file weight normalization:
+
+```bash
+./env/bin/python scripts/rank_players.py --decay 0.5 --normalize-file-weights --k 20 --projected-games 82 --out ranked_players.csv
+```
+
 Options
 - `--league-id`: (required) league id, e.g. `nhl.l.2354566`
 - `--oauth-file`: (required) path to your `oauth2.json` credentials file

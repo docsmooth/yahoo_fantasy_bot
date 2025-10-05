@@ -40,6 +40,14 @@ DEFAULT_WEIGHTS: Mapping[str, float] = {
     "BLK": 1.0,
 }
 
+# Default goalie weights (user requested)
+DEFAULT_GOALIE_WEIGHTS: Mapping[str, float] = {
+    "W": 5.0,   # Win
+    "GA": -3.0, # Goals Against (negative)
+    "SV": 0.6,  # Save
+    "SO": 5.0,  # Shutout
+}
+
 
 def _first_available_value(row: pd.Series, candidates: Iterable[str]) -> float:
     """Return the first non-null numeric value from row for candidate column names."""
@@ -69,6 +77,19 @@ _COLUMN_ALIASES: Dict[str, Iterable[str]] = {
     "GP": ("GP", "GGP", "Games", "GamesPlayed", "games_played", "games"),
 }
 
+# Goalie-specific aliases
+_GOALIE_ALIASES: Dict[str, Iterable[str]] = {
+    "W": ("W", "Wins", "wins"),
+    "GA": ("GA", "GoalsAgainst", "goals_against", "GAa"),
+    "SV": ("SV", "Saves", "saves", "SVs"),
+    "SO": ("SO", "Shutouts", "shutouts"),
+    # Optional rate fields
+    "SVPCT": ("SV%", "SV%", "SVPct", "SavePct", "SvPct"),
+    "GAA": ("GAA", "GoalsAgainstAverage", "gaa"),
+    # Position hint
+    "POS": ("Pos", "Position", "position"),
+}
+
 
 def score_row(row: pd.Series, weights: Optional[Mapping[str, float]] = None) -> float:
     """Compute the raw fantasy score for a single player row.
@@ -81,7 +102,54 @@ def score_row(row: pd.Series, weights: Optional[Mapping[str, float]] = None) -> 
     if weights:
         w.update(weights)
 
-    # Extract stats using aliases
+    # Detect goalie rows either by explicit position column or presence of goalie stats
+    pos_val = _first_available_value(row, _GOALIE_ALIASES.get("POS", ())) if _GOALIE_ALIASES.get("POS") else None
+    # _first_available_value returns float; for POS, we need raw string lookup
+    pos_hint = None
+    for c in _GOALIE_ALIASES.get("POS", ()):  # type: ignore[index]
+        if c in row and pd.notna(row[c]):
+            try:
+                pos_hint = str(row[c])
+            except Exception:
+                pos_hint = None
+            break
+
+    # Check for goalie stat columns presence
+    has_goalie_stats = False
+    for alias_list in ("W", "GA", "SV", "SO", "SVPCT", "GAA"):
+        if any((c in row and pd.notna(row[c])) for c in _GOALIE_ALIASES.get(alias_list, ())):
+            has_goalie_stats = True
+            break
+
+    # If pos hint indicates goalie or goalie stats are present, compute goalie score
+    is_goalie = False
+    if pos_hint:
+        try:
+            if isinstance(pos_hint, str) and pos_hint.strip().lower().startswith("g"):
+                is_goalie = True
+        except Exception:
+            is_goalie = False
+    if has_goalie_stats:
+        is_goalie = True
+
+    # If goalie, compute goalie-specific raw score
+    if is_goalie:
+        # Extract goalie stats
+        W = _first_available_value(row, _GOALIE_ALIASES.get("W", ()))
+        GA = _first_available_value(row, _GOALIE_ALIASES.get("GA", ()))
+        SV = _first_available_value(row, _GOALIE_ALIASES.get("SV", ()))
+        SO = _first_available_value(row, _GOALIE_ALIASES.get("SO", ()))
+        # Use configured goalie weights
+        gw = dict(DEFAULT_GOALIE_WEIGHTS)
+        # Build goalie raw score
+        raw_goalie = 0.0
+        raw_goalie += gw.get("W", 0.0) * W
+        raw_goalie += gw.get("GA", 0.0) * GA
+        raw_goalie += gw.get("SV", 0.0) * SV
+        raw_goalie += gw.get("SO", 0.0) * SO
+        return raw_goalie
+
+    # Otherwise, treat as skater and compute as before
     G = _first_available_value(row, _COLUMN_ALIASES["G"])
     A = _first_available_value(row, _COLUMN_ALIASES["A"])
     PLUS = _first_available_value(row, _COLUMN_ALIASES["PLUS"])
@@ -193,6 +261,7 @@ def score_multiple_files(
     header: int = 1,
     decay: float = 0.5,
     weight_by_games: bool = True,
+    normalize_file_weights: bool = False,
     key_name: str = "Name",
     projected_games: int = 82,
     k: float = 20.0,
@@ -254,29 +323,81 @@ def score_multiple_files(
     # compute weights and weighted aggregate
     # newest file is index 0 in file_paths
     combined_pg = []
-    combined_weights = []
+    # Build per-file weight series (per-player) so we can optionally normalize per player
     for idx in range(len(file_paths)):
         suffix = f"_f{idx}"
         gp_col = f"gp{suffix}"
         spg_col = f"shrunk_per_game{suffix}"
-        # base weight
         base_w = decay ** idx
+        # Determine which players appear to be goalies in this file by checking
+        # for presence of a position column or goalie stat columns for that file.
+        # We added goalie aliases earlier; the merged frame may contain only
+        # per-file columns. We'll infer goalie rows for this file by looking at
+        # the raw_score column (goalie raw scores come from goalie stat fields)
+        # and by checking for presence of common goalie stat columns in merged.
+        # Create a boolean mask per-player for goalie in this file.
+        # Heuristic: if the file had non-zero raw_score but all skater stat cols
+        # are zero, it's likely a goalie. Simpler: if gp>0 and shrunk_per_game>0
+        # and raw_score_f{idx} corresponds to goalie contributions, we need a
+        # robust approach. We'll instead try: if any goalie-specific per-file
+        # column exists in merged, and its value>0, mark goalie.
+        goalie_mask = pd.Series([False] * len(merged), index=merged.index)
+        # columns we could check: raw_score{suffix} exists and may be goalie or skater
+        # Look for common goalie stat columns (we don't have SV/GA per-file merged columns),
+        # so use a heuristic: assume player is goalie in that file if their shrunk_per_game
+        # is non-zero but their raw_score is small compared to a typical skater threshold,
+        # OR if the Name is missing typical skater stats. To keep this deterministic and
+        # conservative, we will only apply the no-gp-weight rule when the Position column
+        # exists in the merged frame (from earlier enrichment) and indicates goalie.
+        pos_col_candidates = [c for c in merged.columns if c.lower() == 'position' or c.lower().endswith('.position')]
+        if pos_col_candidates:
+            pos_col = pos_col_candidates[0]
+            goalie_mask = merged[pos_col].astype(str).str.strip().str.lower().str.startswith('g') | merged[pos_col].astype(str).str.lower().str.contains('goal')
+
         if weight_by_games:
+            # per-player series: multiply by gp for skaters, but not for goalies
             w = base_w * merged[gp_col]
+            # where goalie_mask is True, revert to base_w (no gp multiplier)
+            if goalie_mask.any():
+                # create a series of base_w values
+                scalar_series = pd.Series([base_w] * len(merged), index=merged.index)
+                w = w.where(~goalie_mask, scalar_series)
         else:
-            w = base_w
+            # scalar -> convert to series for consistent operations
+            w = pd.Series([base_w] * len(merged), index=merged.index)
         combined_pg.append((spg_col, w))
-        combined_weights.append(w)
+
+    # Optionally normalize file weights per-player so the weights across files sum to 1
+    if normalize_file_weights and len(combined_pg) > 0:
+        # sum of weights per player
+        total_w = None
+        for _, w in combined_pg:
+            if total_w is None:
+                total_w = w.copy()
+            else:
+                total_w = total_w + w
+        # avoid division by zero; where total_w == 0 we leave weights as zero
+        for i, (spg_col, w) in enumerate(combined_pg):
+            # safe division: where total_w>0, divide, else keep zero
+            denom_mask = total_w > 0
+            new_w = pd.Series([0.0] * len(w), index=w.index)
+            if denom_mask.any():
+                new_w.loc[denom_mask] = w.loc[denom_mask] / total_w.loc[denom_mask]
+            combined_pg[i] = (spg_col, new_w)
 
     # numerator: sum(spg * w), denominator: sum(w)
-    num = 0
-    denom = 0
+    num = pd.Series([0.0] * len(merged), index=merged.index)
+    denom = pd.Series([0.0] * len(merged), index=merged.index)
     for spg_col, w in combined_pg:
         num = num + (merged[spg_col] * w)
         denom = denom + w
 
-    # avoid division by zero
-    merged["combined_shrunk_per_game"] = (num / denom).fillna(0.0)
+    # avoid division by zero across players
+    combined = pd.Series([0.0] * len(merged), index=merged.index)
+    nonzero = denom != 0
+    if nonzero.any():
+        combined.loc[nonzero] = num.loc[nonzero] / denom.loc[nonzero]
+    merged["combined_shrunk_per_game"] = combined.fillna(0.0)
     merged["combined_projected_total"] = merged["combined_shrunk_per_game"] * projected_games
     merged["combined_ranking_score"] = merged["combined_projected_total"]
 

@@ -29,6 +29,7 @@ def main(argv=None):
     p.add_argument("--weight-by-games", dest='weight_by_games', action='store_true', help="Multiply per-file contributions by games played (default)")
     p.add_argument("--no-weight-by-games", dest='weight_by_games', action='store_false', help="Do not weight per-file contributions by games played")
     p.set_defaults(weight_by_games=True)
+    p.add_argument("--normalize-file-weights", action='store_true', help="Normalize per-file weights per-player so per-file weights sum to 1 across files")
     p.add_argument("--yahoo-points-field", default=None, help="When fetching Yahoo points, prefer this stat key (e.g. PPT, total_points)")
     p.add_argument("--fuzzy-match", type=float, default=0.0, help="Enable fuzzy name matching threshold (0-100); 0 disables fuzzy matching")
     p.add_argument("--fetch-yahoo", action='store_true', help="Attempt to fetch Yahoo Y! points via API (requires --league-id and oauthFile in config)")
@@ -52,7 +53,15 @@ def main(argv=None):
 
     print(f"Using files (newest-first): {[str(p) for p in files]}")
     print("Scoring players from multiple files (decay=0.5, weight_by_games=True)...")
-    scored = scoring.score_multiple_files([str(p) for p in files], sheet_name=args.sheet, decay=args.decay, weight_by_games=args.weight_by_games, projected_games=args.projected_games, k=args.k)
+    scored = scoring.score_multiple_files(
+        [str(p) for p in files],
+        sheet_name=args.sheet,
+        decay=args.decay,
+        weight_by_games=args.weight_by_games,
+        projected_games=args.projected_games,
+        k=args.k,
+        normalize_file_weights=args.normalize_file_weights,
+    )
 
     # Optionally fetch Yahoo points via API
     if args.fetch_yahoo:

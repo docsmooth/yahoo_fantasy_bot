@@ -119,3 +119,24 @@ Here is a sample run through.  In this run it will optimize the lineup, print ou
   Move Aaron Ekblad to D
   Move Jeff Skinner to BN
   Move Patrice Bergeron to BN
+
+Ranking QuantHockey files
+-------------------------
+
+If you have QuantHockey Excel files in the `data/` directory you can generate a ranked players CSV using the included script. The script will read one or more QuantHockey `.xlsx` files and compute a per-player score (normalized by games played using empirical-Bayes shrinkage), then write `ranked_players.csv` to the current directory.
+
+A simple example (defaults: decay=0.5, k=20, projected-games=82):
+
+::
+
+  ./scripts/rank_players.py --data-dir data/ --out ranked_players.csv
+
+Common options:
+
+- `--decay` : per-file decay factor when combining multiple files (default 0.5)
+- `--k` : prior weight for empirical-Bayes shrinkage (default 20)
+- `--projected-games` : number of games to project for ranking (default 82)
+- `--normalize-file-weights` : normalize per-file weights per-player so no single file dominates
+- `--fetch-yahoo` : try to fetch Yahoo points for comparison (requires `my.cfg` / `oauth2.json`)
+
+Run `./scripts/rank_players.py --help` for the full list of options.
