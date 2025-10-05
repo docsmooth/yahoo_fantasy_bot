@@ -181,6 +181,7 @@ def score_dataframe(
     games_col_candidates: Optional[Iterable[str]] = None,
     k: float = 20.0,
     projected_games: int = 82,
+    compute_per_game: bool = True,
     weights: Optional[Mapping[str, float]] = None,
 ) -> pd.DataFrame:
     """Score a DataFrame of players and return augmented DataFrame.
@@ -199,8 +200,8 @@ def score_dataframe(
     - gp: games played inferred
     - per_game: raw_score / gp (or raw_score if gp==0)
     - league_mean_per_game: scalar (same for all rows)
-    - shrunk_per_game: shrinkage-adjusted per-game estimate
-    - projected_total: shrunk_per_game * projected_games
+    - shrunk_per_game: shrinkage-adjusted per-game estimate (skaters only; goalies are not shrunk)
+    - projected_total: per_game * projected_games (when compute_per_game=True); if compute_per_game=False projected_total=raw_score
     - adjusted_total: shrunk_per_game * gp (estimates for player's counted season)
     """
     df = df.copy()
@@ -210,36 +211,122 @@ def score_dataframe(
     # compute raw scores
     df["raw_score"] = df.apply(lambda r: score_row(r, weights=weights), axis=1)
 
+    # detect goalies in the input DataFrame (by position column or goalie stat columns)
+    def _is_goalie_row(r):
+        # check position hints first
+        for c in _GOALIE_ALIASES.get("POS", ()):  # type: ignore[index]
+            if c in r and pd.notna(r[c]):
+                try:
+                    if isinstance(r[c], str) and r[c].strip().lower().startswith("g"):
+                        return True
+                except Exception:
+                    pass
+        # check for goalie stat columns
+        for alias_list in ("W", "GA", "SV", "SO", "SVPCT", "GAA"):
+            for c in _GOALIE_ALIASES.get(alias_list, ()):  # type: ignore[index]
+                if c in r and pd.notna(r[c]):
+                    return True
+        return False
+
+    df["is_goalie"] = df.apply(_is_goalie_row, axis=1)
+
     # infer GP
     df["gp"] = df.apply(lambda r: _first_available_value(r, games_col_candidates), axis=1)
 
-    # per-game
-    df["per_game"] = df.apply(lambda r: (r["raw_score"] / r["gp"]) if r["gp"] and r["gp"] > 0 else 0.0, axis=1)
+    if compute_per_game:
+        # per-game
+        df["per_game"] = df.apply(lambda r: (r["raw_score"] / r["gp"]) if r["gp"] and r["gp"] > 0 else 0.0, axis=1)
 
-    # league mean per game (exclude zeros to avoid bias from players with no GP)
-    nonzero = df["gp"] > 0
-    if nonzero.any():
-        league_mean = df.loc[nonzero, "per_game"].mean()
-    else:
-        league_mean = df["per_game"].mean()
-
-    df["league_mean_per_game"] = league_mean
-
-    # shrink per-game toward league mean using games as sample size and k as prior weight
-    def _shrink(r):
-        gp = r["gp"]
-        pg = r["per_game"]
-        if gp and gp > 0:
-            return (pg * gp + league_mean * k) / (gp + k)
+        # league mean per game (exclude zeros to avoid bias from players with no GP)
+        nonzero = df["gp"] > 0
+        if nonzero.any():
+            league_mean = df.loc[nonzero, "per_game"].mean()
         else:
-            return league_mean
+            league_mean = df["per_game"].mean()
 
-    df["shrunk_per_game"] = df.apply(_shrink, axis=1)
-    df["projected_total"] = df["shrunk_per_game"] * projected_games
-    df["adjusted_total"] = df["shrunk_per_game"] * df["gp"]
+        df["league_mean_per_game"] = league_mean
 
-    # Provide a final ranking value, default using projected_total
-    df["ranking_score"] = df["projected_total"]
+        # shrink per-game toward league mean using games as sample size and k as prior weight
+        def _shrink(r):
+            # Goalies are exempt from shrink -- use raw per_game
+            if r.get("is_goalie"):
+                return r["per_game"]
+            gp = r["gp"]
+            pg = r["per_game"]
+            if gp and gp > 0:
+                return (pg * gp + league_mean * k) / (gp + k)
+            else:
+                return league_mean
+
+        df["shrunk_per_game"] = df.apply(_shrink, axis=1)
+        # projected_total uses per_game (not shrunk) per your request
+        # If goalies have missing or zero per_game (because goalie stats weren't
+        # present in the source), provide a conservative default so they receive
+        # meaningful projections. Compute the mean per_game among goalies first.
+        goalie_mean = None
+        try:
+            gm = df.loc[df["is_goalie"] & (df["per_game"] > 0), "per_game"]
+            if not gm.empty:
+                goalie_mean = gm.mean()
+        except Exception:
+            goalie_mean = None
+
+        DEFAULT_GOALIE_PER_GAME = 1.98
+        if goalie_mean is None or pd.isna(goalie_mean):
+            goalie_mean = DEFAULT_GOALIE_PER_GAME
+
+        # assign fallback per_game to goalies that have per_game == 0
+        mask_goalie_zero = (df["is_goalie"]) & (df["per_game"] == 0)
+        if mask_goalie_zero.any():
+            # compute average GP among goalies (use >0 GPs when available)
+            try:
+                goalie_gps = df.loc[df["is_goalie"], "gp"].astype(float)
+                avg_goalie_gp = float(goalie_gps[goalie_gps > 0].mean()) if (goalie_gps > 0).any() else 0.0
+            except Exception:
+                avg_goalie_gp = 0.0
+
+            # We'll vary the fallback per-game slightly based on a player's GP
+            # so goalies with more playing time get modestly higher projections.
+            # factor = 1 + scale * (gp - avg_gp) / avg_gp, clipped to [0.5, 2.0]
+            scale = 0.2
+            def _goalie_fallback_val(r):
+                gp = float(r.get("gp") or 0.0)
+                if avg_goalie_gp and avg_goalie_gp > 0:
+                    factor = 1.0 + scale * ((gp - avg_goalie_gp) / avg_goalie_gp)
+                else:
+                    factor = 1.0
+                # clip
+                if factor < 0.5:
+                    factor = 0.5
+                if factor > 2.0:
+                    factor = 2.0
+                return float(goalie_mean) * factor
+
+            # apply per-row fallback
+            df.loc[mask_goalie_zero, "per_game"] = df.loc[mask_goalie_zero].apply(_goalie_fallback_val, axis=1)
+
+        # Ensure goalie shrunk_per_game matches per_game after any fallback
+        # (goalies are exempt from shrinkage, so their shrunk_per_game should
+        # equal their per_game even after we assigned a fallback value).
+        try:
+            df.loc[df["is_goalie"], "shrunk_per_game"] = df.loc[df["is_goalie"], "per_game"]
+        except Exception:
+            # be conservative if assignment fails for any reason
+            pass
+
+        df["projected_total"] = df["per_game"] * projected_games
+        df["adjusted_total"] = df["shrunk_per_game"] * df["gp"]
+
+        # Provide a final ranking value, default using projected_total
+        df["ranking_score"] = df["projected_total"]
+    else:
+        # per-game computation disabled: fall back to raw season totals for projections
+        df["per_game"] = 0.0
+        df["league_mean_per_game"] = 0.0
+        df["shrunk_per_game"] = 0.0
+        df["projected_total"] = df["raw_score"]
+        df["adjusted_total"] = df["raw_score"]
+        df["ranking_score"] = df["raw_score"]
 
     # Detect Yahoo scoring column if present and compute delta
     yahoo_candidates = ("Y! Points", "Yahoo Points", "Yahoo", "Y!", "YPoints", "YahooScore", "Y! Pts")
@@ -265,6 +352,7 @@ def score_multiple_files(
     key_name: str = "Name",
     projected_games: int = 82,
     k: float = 20.0,
+    compute_per_game: bool = True,
     weights: Optional[Mapping[str, float]] = None,
 ):
     """Read multiple QuantHockey-style files and combine scores with decaying weights.
@@ -289,7 +377,7 @@ def score_multiple_files(
             df = pd.read_excel(path, sheet_name=sheet_name, header=header)
         except Exception as e:
             raise
-        scored = score_dataframe(df, k=k, projected_games=projected_games, weights=weights)
+        scored = score_dataframe(df, k=k, projected_games=projected_games, compute_per_game=compute_per_game, weights=weights)
         # keep key, gp, shrunk_per_game, projected_total, raw_score
         cols_to_keep = [key_name, "gp", "shrunk_per_game", "projected_total", "raw_score"]
         if "yahoo_score" in scored.columns:

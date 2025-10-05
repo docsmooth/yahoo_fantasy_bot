@@ -26,6 +26,8 @@ def main(argv=None):
     p.add_argument("--projected-games", type=int, default=82)
     p.add_argument("--k", type=float, default=20.0, help="Shrinkage prior weight")
     p.add_argument("--decay", type=float, default=0.5, help="Decay factor for multi-file weighting (0<decay<=1)")
+    p.add_argument("--no-per-game", dest='compute_per_game', action='store_false', help="Disable per-game computations and use raw totals for projections")
+    p.set_defaults(compute_per_game=True)
     p.add_argument("--weight-by-games", dest='weight_by_games', action='store_true', help="Multiply per-file contributions by games played (default)")
     p.add_argument("--no-weight-by-games", dest='weight_by_games', action='store_false', help="Do not weight per-file contributions by games played")
     p.set_defaults(weight_by_games=True)
@@ -61,6 +63,7 @@ def main(argv=None):
         projected_games=args.projected_games,
         k=args.k,
         normalize_file_weights=args.normalize_file_weights,
+        compute_per_game=args.compute_per_game,
     )
 
     # Optionally fetch Yahoo points via API
