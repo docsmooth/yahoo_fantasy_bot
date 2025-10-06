@@ -3,7 +3,7 @@
 """A bot that acts as a manager for Yahoo! fantasy team
 
 Usage:
-    ybot [-ayfri] [-g x] [--score] [--scoring-params=<opts>] [--goalie-method=<m>] [--sort-by=<s>] [--reverse] [--decay=<d>] [--no-per-game] <cfg_file>
+    ybot [options] <cfg_file>
 
   <cfg_file>  The name of the configuration file.  See sample_config.ini for
               the format.
@@ -28,12 +28,28 @@ Options:
                       for the starting lineup.
     --score             Run the scoring script (`scripts/rank_players.py`) before
                                             running the bot and make scored CSV available to the bot.
-    --scoring-params=<opts> Quoted options to pass to `scripts/rank_players.py`.
-    --goalie-method=<m> Goalies scoring method: stats|gp-fallback|constant. Overrides scoring default when --score is used.
-    --sort-by=<s>       How to sort input files for scoring: name|mtime. Passed to scoring when --score is used.
-    --reverse           Reverse the sort order when discovering input files for scoring.
+    --rank-extra=<opts> Quoted options to pass to `scripts/rank_players.py`.
+    --input=<path>       Path to a single QuantHockey .xlsx file (overrides data discovery).
+    --sheet=<name>       Sheet name in the Excel file to read (default: QuantHockey).
+    --projected-games=<n>
+                        Projected games to use for per-game scaling (e.g. 82).
+    --k=<k>              Shrinkage prior weight for empirical-Bayes (default: 20).
     --decay=<d>         Decay factor to pass to scoring (float between 0 and 1).
+    --sort-by=<s>       How to sort input files for scoring: name|mtime.
+    --reverse           Reverse the discovered file order.
+    --goalie-method=<m> Goalies scoring method: stats|gp-fallback|constant. Overrides scoring default when --score is used.
     --no-per-game       Disable per-game computation in scoring; useful when you want raw totals only.
+    --weight-by-games   Weight per-file contributions by games played (default behavior in rank_players).
+    --no-weight-by-games
+                        Do not weight per-file contributions by games played.
+    --normalize-file-weights
+                        Normalize per-file weights per-player so no single file dominates.
+    --yahoo-points-field=<f>
+                        Yahoo points field key to prefer when fetching Yahoo points (e.g. PPT).
+    --fuzzy-match=<n>   Enable fuzzy name matching threshold (0-100) when merging Yahoo points.
+    --fetch-yahoo       Attempt to fetch Yahoo points via API (requires --league-id and oauth file).
+    --league-id=<id>    Yahoo league id to use when fetching Yahoo points.
+    --oauth-file=<path> OAuth file path for Yahoo API (default: oauth2.json).
 
 """
 from docopt import docopt
@@ -98,20 +114,20 @@ if __name__ == '__main__':
         if args.get('--no-per-game'):
             cmd_parts += ['--no-per-game']
 
-        # Backward compatible: allow --scoring-params (new) or --score-opts (old) quoted string to append extra flags
-        score_opts = args.get('--scoring-params') or args.get('--scoring-opts') or ''
-        if score_opts:
-            # Split and extend
-            cmd_parts += shlex.split(score_opts)
+            # Extra params to append to the rank_players invocation
+            score_opts = args.get('--rank-extra') or ''
+            if score_opts:
+                # Split and extend
+                cmd_parts += shlex.split(score_opts)
 
-        print('Running scoring command:', ' '.join(cmd_parts))
-        try:
-            proc = subprocess.run(cmd_parts, check=True, capture_output=True)
-            print(proc.stdout.decode())
-            cfg['Scoring'] = cfg.get('Scoring', {})
-            cfg['Scoring']['scored_csv'] = out_path
-        except subprocess.CalledProcessError as e:
-            print('Scoring command failed:')
-            print(e.stdout.decode())
-            print(e.stderr.decode())
+            print('Running scoring command:', ' '.join(cmd_parts))
+            try:
+                proc = subprocess.run(cmd_parts, check=True, capture_output=True)
+                print(proc.stdout.decode())
+                cfg['Scoring'] = cfg.get('Scoring', {})
+                cfg['Scoring']['scored_csv'] = out_path
+            except subprocess.CalledProcessError as e:
+                print('Scoring command failed:')
+                print(e.stdout.decode())
+                print(e.stderr.decode())
     auto.run()
