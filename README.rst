@@ -154,6 +154,46 @@ Build status
 
     Run `./scripts/rank_players.py --help` for the full list of options.
 
+    Running scoring from `ybot`
+    --------------------------
+
+    You can run the ranking/scoring step from the main `ybot` CLI using the
+    `--score` flag. `ybot` exposes a subset of the scoring options as first-class
+    flags so you can control scoring behavior without calling `scripts/rank_players.py`
+    directly.
+
+    Example: run scoring with GP-aware goalie fallback, lexicographic file order,
+    and write the scored CSV before running the bot:
+
+    ::
+
+      ./env/bin/python scripts/ybot --score --goalie-method gp-fallback --sort-by name my.cfg
+
+    Exposed scoring-related options on `ybot`:
+
+    - `--input=<path>`: Path to a single QuantHockey `.xlsx` file (overrides data discovery).
+    - `--sheet=<name>`: Sheet name in the Excel file to read (default: QuantHockey).
+    - `--projected-games=<n>`: Projected games to use for per-game scaling (e.g. 82).
+    - `--k=<k>`: Shrinkage prior weight for empirical-Bayes (default: 20).
+    - `--decay=<d>`: Decay factor when combining multiple files (0<d<=1).
+    - `--sort-by=<s>`: How to sort discovered input files for scoring: `name` or `mtime`.
+    - `--reverse`: Reverse the discovered file order.
+    - `--goalie-method=<m>`: `stats`|`gp-fallback`|`constant` — goalie per-game fallback method.
+    - `--no-per-game`: Disable per-game computations and use raw totals.
+    - `--weight-by-games` / `--no-weight-by-games`: Toggle whether per-file contributions are weighted by games played.
+    - `--normalize-file-weights`: Normalize per-file weights per-player so no single file dominates.
+    - `--yahoo-points-field=<f>`: Yahoo points field key to prefer when fetching Yahoo points.
+    - `--fuzzy-match=<n>`: Fuzzy name matching threshold (0-100) when merging Yahoo points.
+    - `--fetch-yahoo`: Attempt to fetch Yahoo points via API (requires `--league-id` and OAuth file).
+    - `--league-id=<id>`: Yahoo league id to use when fetching Yahoo points.
+    - `--oauth-file=<path>`: OAuth file path for Yahoo API (default: oauth2.json).
+
+    When `--score` is provided, `ybot` will run `scripts/rank_players.py` with the
+    equivalent flags and make the resulting `scored_players.csv` available to the
+    bot via the `Scoring.scored_csv` config key. The bot will then merge
+    `combined_projected_total` and `combined_shrunk_per_game` into its player pool
+    when present.
+
     Additional CLI options (file discovery and goalie behavior)
     ---------------------------------------------------------
 
