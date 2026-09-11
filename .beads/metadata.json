@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "yahoo_fantasy_bot",
+  "project_id": "a9684f82-15df-482c-8eb7-27d06fb8a143"
+}
