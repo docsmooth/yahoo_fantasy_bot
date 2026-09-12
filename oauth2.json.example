@@ -1,0 +1,8 @@
+{
+    "access_token": "REPLACE_ME_ACCESS_TOKEN",
+    "consumer_key": "REPLACE_ME_CONSUMER_KEY",
+    "consumer_secret": "REPLACE_ME_CONSUMER_SECRET",
+    "refresh_token": "REPLACE_ME_REFRESH_TOKEN",
+    "token_time": 0.0,
+    "token_type": "bearer"
+}

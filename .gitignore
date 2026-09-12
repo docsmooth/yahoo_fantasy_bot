@@ -2,7 +2,8 @@
 *.model
 .ipynb_checkpoints
 __pycache__/
-oauth2.*.json
+oauth2*.json
+!oauth2.json.example
 anaconda-project-local.yml
 .cache/
 .eggs/
