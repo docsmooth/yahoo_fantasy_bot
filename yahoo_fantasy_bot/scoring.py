@@ -20,7 +20,14 @@ Functions:
 The scoring functions are robust to common alternate column names returned
 by different data sources. They return raw totals, per-game rates, and
 shrunken/per-game estimates that account for games played.
+
+Note: the real QuantHockey export also includes a 'HITS' column. This is
+deliberately NOT scored -- there is no weight for it in DEFAULT_WEIGHTS and
+no alias entry for it. That is a scoring-policy choice, not a bug (unlike
+the BS/BLK alias miss tracked as yahoo_fantasy_bot-zop): don't add it
+without an explicit decision to change the scoring policy.
 """
+import sys
 from typing import Dict, Iterable, Mapping, Optional
 
 import pandas as pd
@@ -73,7 +80,10 @@ _COLUMN_ALIASES: Dict[str, Iterable[str]] = {
     # QuantHockey uses 'SHOTS' as total shot attempts
     "SATT": ("SHOTS", "SAT", "SATT", "ShotAttempts", "Shot_Attempts", "SCA", "SOG", "Shots", "shots"),
     "PIM": ("PIM", "PIMs", "PenaltiesInMinutes", "PIMs"),
-    "BLK": ("BLK", "Blocks", "blocks"),
+    # QuantHockey's real column for blocked shots is 'BS'; without it here
+    # the +1/block weight in DEFAULT_WEIGHTS never applied to real data
+    # (yahoo_fantasy_bot-zop).
+    "BLK": ("BLK", "BS", "BkS", "BLKS", "Blocks", "blocks"),
     "GP": ("GP", "GGP", "Games", "GamesPlayed", "games_played", "games"),
 }
 
@@ -184,6 +194,9 @@ def score_dataframe(
     compute_per_game: bool = True,
     goalie_method: str = "gp-fallback",
     weights: Optional[Mapping[str, float]] = None,
+    goalie_stats_df: Optional[pd.DataFrame] = None,
+    goalie_name_col: str = "Name",
+    source_name: Optional[str] = None,
 ) -> pd.DataFrame:
     """Score a DataFrame of players and return augmented DataFrame.
 
@@ -195,15 +208,37 @@ def score_dataframe(
     - projected_games: number of games to project a full season (used when
       computing `projected_total`)
     - weights: optional weights override (see `DEFAULT_WEIGHTS`)
+    - goalie_stats_df: optional separate QuantHockey-style goalie export
+      (columns including W/GA/SV/SO) used to score goalie rows for real,
+      keyed by `goalie_name_col` (see yahoo_fantasy_bot-fow). When a goalie
+      row in `df` has no match here (or `goalie_stats_df` isn't given at
+      all), its per_game estimate falls back to the constant/GP-based
+      fabrication described below, is flagged in `goalie_stats_fabricated`,
+      and a warning naming `source_name` (or the row count) is printed to
+      stderr.
+    - goalie_name_col: column name used to join `df` and `goalie_stats_df`
+    - source_name: label used only in the stderr warning above (e.g. a file
+      path), so the operator knows which input needs a --goalie-input
 
     Adds these columns to the returned DataFrame:
-    - raw_score: raw season total score
+    - raw_score: raw season total score (goalie rows use real goalie stats
+      when resolved via `goalie_stats_df`, or the same-sheet goalie columns
+      if present; otherwise 0.0)
     - gp: games played inferred
     - per_game: raw_score / gp (or raw_score if gp==0)
-    - league_mean_per_game: scalar (same for all rows)
+    - league_mean_per_game: scalar (same for all rows); computed over
+      SKATERS ONLY (excludes goalies, which are exempt from shrinkage --
+      see yahoo_fantasy_bot-chg)
     - shrunk_per_game: shrinkage-adjusted per-game estimate (skaters only; goalies are not shrunk)
-    - projected_total: per_game * projected_games (when compute_per_game=True); if compute_per_game=False projected_total=raw_score
+    - per_game_projection: per_game * projected_games -- the raw (unshrunk) view
+    - projected_total: shrunk_per_game * projected_games (when
+      compute_per_game=True); if compute_per_game=False projected_total=raw_score.
+      Ranking is done on the shrunk estimate so small samples don't
+      outrank full seasons (see yahoo_fantasy_bot-t0p).
     - adjusted_total: shrunk_per_game * gp (estimates for player's counted season)
+    - goalie_stats_fabricated: True for goalie rows whose per_game is a
+      fabricated GP-based/constant estimate rather than derived from real
+      goalie stats (see yahoo_fantasy_bot-fow)
     """
     df = df.copy()
     if games_col_candidates is None:
@@ -234,6 +269,24 @@ def score_dataframe(
     # infer GP
     df["gp"] = df.apply(lambda r: _first_available_value(r, games_col_candidates), axis=1)
 
+    # yahoo_fantasy_bot-fow: if a separate goalie-stats export was supplied,
+    # score those rows for real (DEFAULT_GOALIE_WEIGHTS via score_row, which
+    # already takes the goalie branch once W/GA/SV/SO are present) and
+    # overwrite the fabricated raw_score==0.0 for any matching goalie rows.
+    df["_has_real_goalie_stats"] = False
+    if goalie_stats_df is not None and len(goalie_stats_df) > 0 and goalie_name_col in df.columns:
+        gsdf = goalie_stats_df.copy()
+        if goalie_name_col in gsdf.columns:
+            gsdf["_real_goalie_raw_score"] = gsdf.apply(lambda r: score_row(r, weights=weights), axis=1)
+            gsdf = gsdf[[goalie_name_col, "_real_goalie_raw_score"]].drop_duplicates(
+                subset=[goalie_name_col], keep="first"
+            )
+            df = df.merge(gsdf, on=goalie_name_col, how="left")
+            has_real = df["is_goalie"] & df["_real_goalie_raw_score"].notna()
+            df.loc[has_real, "raw_score"] = df.loc[has_real, "_real_goalie_raw_score"]
+            df.loc[has_real, "_has_real_goalie_stats"] = True
+            df = df.drop(columns=["_real_goalie_raw_score"])
+
     if compute_per_game:
         # per-game
     # For goalies: allow multiple strategies selected via `goalie_method`:
@@ -255,20 +308,27 @@ def score_dataframe(
             if not r.get("is_goalie"):
                 return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
 
-            # If goalie and 'stats' method selected and goalie stats present,
-            # compute per_game from goalie raw_score.
-            if goalie_method == 'stats' and goalie_stats_present:
-                return (r["raw_score"] / gp) if gp and gp > 0 else 0.0
+            # If we have a genuine stats-derived goalie raw_score -- either
+            # from a matched yahoo_fantasy_bot-fow --goalie-input row, or
+            # from goalie stat columns present on this same sheet -- use it
+            # regardless of `goalie_method` (real signal always wins over
+            # fabrication; `goalie_method` only controls the fallback used
+            # when no real goalie stats are available at all).
+            if (r.get("_has_real_goalie_stats") or goalie_stats_present) and gp and gp > 0:
+                return r["raw_score"] / gp
 
             # For other goalie methods we'll compute per_game later via fallbacks
             return 0.0
 
         df["per_game"] = df.apply(_per_game_row, axis=1)
 
-        # league mean per game (exclude zeros to avoid bias from players with no GP)
-        nonzero = df["gp"] > 0
-        if nonzero.any():
-            league_mean = df.loc[nonzero, "per_game"].mean()
+        # league mean per game -- SKATERS ONLY (yahoo_fantasy_bot-chg).
+        # Goalies are exempt from shrinkage, so they have no business in the
+        # shrinkage target; including them (at this point in the pipeline
+        # their per_game is still 0.0, pre-fallback) dragged the mean down.
+        skater_nonzero = (~df["is_goalie"]) & (df["gp"] > 0)
+        if skater_nonzero.any():
+            league_mean = df.loc[skater_nonzero, "per_game"].mean()
         else:
             league_mean = df["per_game"].mean()
 
@@ -287,10 +347,10 @@ def score_dataframe(
                 return league_mean
 
         df["shrunk_per_game"] = df.apply(_shrink, axis=1)
-        # projected_total uses per_game (not shrunk) per your request
         # If goalies have missing or zero per_game (because goalie stats weren't
-        # present in the source), provide a conservative default so they receive
-        # meaningful projections. Compute the mean per_game among goalies first.
+        # present in the source, and no --goalie-input matched them), provide a
+        # conservative default so they receive meaningful projections. Compute
+        # the mean per_game among goalies first.
         goalie_mean = None
         try:
             gm = df.loc[df["is_goalie"] & (df["per_game"] > 0), "per_game"]
@@ -303,9 +363,26 @@ def score_dataframe(
         if goalie_mean is None or pd.isna(goalie_mean):
             goalie_mean = DEFAULT_GOALIE_PER_GAME
 
-        # assign fallback per_game to goalies that have per_game == 0
+        # assign fallback per_game to goalies that have per_game == 0 -- these
+        # are goalies for whom we have NO real stats (no --goalie-input match,
+        # no same-sheet W/GA/SV/SO). yahoo_fantasy_bot-fow: warn loudly rather
+        # than silently fabricating, and flag the fabricated rows so a
+        # fabricated number never reaches the CSV unmarked.
+        df["goalie_stats_fabricated"] = False
         mask_goalie_zero = (df["is_goalie"]) & (df["per_game"] == 0)
         if mask_goalie_zero.any():
+            df.loc[mask_goalie_zero, "goalie_stats_fabricated"] = True
+            count = int(mask_goalie_zero.sum())
+            label = source_name or "<input>"
+            print(
+                f"WARNING: {count} goalie row(s) in {label} have no real "
+                "goalie stats (no W/GA/SV/SO columns and no --goalie-input "
+                "match); assigning a fabricated per_game estimate derived "
+                "from GP/DEFAULT_GOALIE_PER_GAME instead of actual "
+                "performance. Pass --goalie-input <path> with a real "
+                "goalie-stats export to fix this (yahoo_fantasy_bot-fow).",
+                file=sys.stderr,
+            )
             if goalie_method == 'constant':
                 df.loc[mask_goalie_zero, "per_game"] = float(goalie_mean)
             elif goalie_method == 'gp-fallback':
@@ -348,7 +425,13 @@ def score_dataframe(
             # be conservative if assignment fails for any reason
             pass
 
-        df["projected_total"] = df["per_game"] * projected_games
+        # yahoo_fantasy_bot-t0p: rank on the SHRUNK per-game rate, not the raw
+        # rate, so a hot 1-2 game stretch can't outrank a full season. Keep
+        # the raw (unshrunk) view available separately as
+        # per_game_projection -- nothing is lost, it's just no longer the
+        # default ranking basis.
+        df["per_game_projection"] = df["per_game"] * projected_games
+        df["projected_total"] = df["shrunk_per_game"] * projected_games
         df["adjusted_total"] = df["shrunk_per_game"] * df["gp"]
 
         # Provide a final ranking value, default using projected_total
@@ -358,9 +441,13 @@ def score_dataframe(
         df["per_game"] = 0.0
         df["league_mean_per_game"] = 0.0
         df["shrunk_per_game"] = 0.0
+        df["per_game_projection"] = df["raw_score"]
         df["projected_total"] = df["raw_score"]
         df["adjusted_total"] = df["raw_score"]
         df["ranking_score"] = df["raw_score"]
+        df["goalie_stats_fabricated"] = False
+
+    df = df.drop(columns=["_has_real_goalie_stats"])
 
     # Detect Yahoo scoring column if present and compute delta
     yahoo_candidates = ("Y! Points", "Yahoo Points", "Yahoo", "Y!", "YPoints", "YahooScore", "Y! Pts")
@@ -389,6 +476,9 @@ def score_multiple_files(
     compute_per_game: bool = True,
     goalie_method: str = "gp-fallback",
     weights: Optional[Mapping[str, float]] = None,
+    goalie_input: Optional[str] = None,
+    goalie_sheet_name: Optional[str] = None,
+    goalie_header: Optional[int] = None,
 ):
     """Read multiple QuantHockey-style files and combine scores with decaying weights.
 
@@ -399,12 +489,34 @@ def score_multiple_files(
     - weight_by_games: if True multiply each file's contribution by games played for that player in that year
     - key_name: the player name column to join on (default 'Name')
     - projected_games, k, weights: passed to internal `score_dataframe` calls
+    - goalie_input: optional path to a separate QuantHockey-style goalie
+      export (columns including W/GA/SV/SO) used to score goalie rows for
+      real in every file (yahoo_fantasy_bot-fow). Read once and reused
+      across all `file_paths`.
+    - goalie_sheet_name/goalie_header: sheet/header for `goalie_input`;
+      default to `sheet_name`/`header` when not given.
 
     Returns an aggregated DataFrame keyed by `key_name` with columns:
     - combined_shrunk_per_game: weighted combination of per-file shrunk_per_game
     - combined_projected_total: combined_shrunk_per_game * projected_games
     - per-file columns are prefixed by year index (0 newest)
+    - Team/Pos: carried through from the NEWEST file only (a player's team
+      can change between seasons, so an older file's Team should not win)
+    - goalie_stats_fabricated_f{idx}: per-file flag, True where that file's
+      goalie per_game estimate is fabricated rather than stats-derived
     """
+    if not file_paths:
+        raise ValueError(
+            "score_multiple_files: no file_paths given -- need at least one "
+            "QuantHockey export to score (yahoo_fantasy_bot-w2u)"
+        )
+
+    goalie_stats_df = None
+    if goalie_input:
+        g_sheet = goalie_sheet_name if goalie_sheet_name is not None else sheet_name
+        g_header = goalie_header if goalie_header is not None else header
+        goalie_stats_df = pd.read_excel(goalie_input, sheet_name=g_sheet, header=g_header)
+
     # collect per-file scored frames
     frames = []
     for idx, path in enumerate(file_paths):
@@ -412,19 +524,33 @@ def score_multiple_files(
             df = pd.read_excel(path, sheet_name=sheet_name, header=header)
         except Exception as e:
             raise
-        scored = score_dataframe(df, k=k, projected_games=projected_games, compute_per_game=compute_per_game, goalie_method=goalie_method, weights=weights)
-        # keep key, gp, shrunk_per_game, projected_total, raw_score
-        cols_to_keep = [key_name, "gp", "shrunk_per_game", "projected_total", "raw_score"]
+        scored = score_dataframe(
+            df, k=k, projected_games=projected_games, compute_per_game=compute_per_game,
+            goalie_method=goalie_method, weights=weights,
+            goalie_stats_df=goalie_stats_df, goalie_name_col=key_name,
+            source_name=str(path),
+        )
+        # keep key, gp, shrunk_per_game, projected_total, raw_score, goalie_stats_fabricated
+        cols_to_keep = [key_name, "gp", "shrunk_per_game", "projected_total", "raw_score", "goalie_stats_fabricated"]
         if "yahoo_score" in scored.columns:
             cols_to_keep.append("yahoo_score")
+        # Carry Name/Team/Pos through from the NEWEST file only (idx==0):
+        # a player's team (and even position) can change between seasons, so
+        # we don't want an older file's value to win a merge (yahoo_fantasy_bot-gl7).
+        if idx == 0:
+            for c in ("Team", "Pos"):
+                if c in scored.columns:
+                    cols_to_keep.append(c)
         out = scored[cols_to_keep].copy()
-        # rename columns to indicate file index (0=newest)
+        # rename columns to indicate file index (0=newest); Team/Pos (idx==0
+        # only) are left unsuffixed since there's only ever one such column.
         suffix = f"_f{idx}"
         out = out.rename(columns={
             "gp": f"gp{suffix}",
             "shrunk_per_game": f"shrunk_per_game{suffix}",
             "projected_total": f"projected_total{suffix}",
             "raw_score": f"raw_score{suffix}",
+            "goalie_stats_fabricated": f"goalie_stats_fabricated{suffix}",
         })
         if "yahoo_score" in out.columns:
             out = out.rename(columns={"yahoo_score": f"yahoo_score{suffix}"})
@@ -438,10 +564,13 @@ def score_multiple_files(
         else:
             merged = merged.merge(f, on=key_name, how="outer")
 
-    # replace NaN gp with 0 and NaN shrunk_per_game with 0
+    # replace NaN gp/shrunk_per_game/projected_total/raw_score with 0, and
+    # NaN goalie_stats_fabricated (player absent from that file) with False
     for col in merged.columns:
         if col.startswith("gp") or col.startswith("shrunk_per_game") or col.startswith("projected_total") or col.startswith("raw_score"):
             merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0.0)
+        elif col.startswith("goalie_stats_fabricated"):
+            merged[col] = merged[col].fillna(False).astype(bool)
 
     # compute weights and weighted aggregate
     # newest file is index 0 in file_paths
@@ -452,39 +581,22 @@ def score_multiple_files(
         gp_col = f"gp{suffix}"
         spg_col = f"shrunk_per_game{suffix}"
         base_w = decay ** idx
-        # Determine which players appear to be goalies in this file by checking
-        # for presence of a position column or goalie stat columns for that file.
-        # We added goalie aliases earlier; the merged frame may contain only
-        # per-file columns. We'll infer goalie rows for this file by looking at
-        # the raw_score column (goalie raw scores come from goalie stat fields)
-        # and by checking for presence of common goalie stat columns in merged.
-        # Create a boolean mask per-player for goalie in this file.
-        # Heuristic: if the file had non-zero raw_score but all skater stat cols
-        # are zero, it's likely a goalie. Simpler: if gp>0 and shrunk_per_game>0
-        # and raw_score_f{idx} corresponds to goalie contributions, we need a
-        # robust approach. We'll instead try: if any goalie-specific per-file
-        # column exists in merged, and its value>0, mark goalie.
-        goalie_mask = pd.Series([False] * len(merged), index=merged.index)
-        # columns we could check: raw_score{suffix} exists and may be goalie or skater
-        # Look for common goalie stat columns (we don't have SV/GA per-file merged columns),
-        # so use a heuristic: assume player is goalie in that file if their shrunk_per_game
-        # is non-zero but their raw_score is small compared to a typical skater threshold,
-        # OR if the Name is missing typical skater stats. To keep this deterministic and
-        # conservative, we will only apply the no-gp-weight rule when the Position column
-        # exists in the merged frame (from earlier enrichment) and indicates goalie.
-        pos_col_candidates = [c for c in merged.columns if c.lower() == 'position' or c.lower().endswith('.position')]
-        if pos_col_candidates:
-            pos_col = pos_col_candidates[0]
-            goalie_mask = merged[pos_col].astype(str).str.strip().str.lower().str.startswith('g') | merged[pos_col].astype(str).str.lower().str.contains('goal')
+        # yahoo_fantasy_bot-6e6: don't multiply a goalie's contribution by GP
+        # (a goalie's games-played isn't commensurate with a skater's, and
+        # weight_by_games is meant to reward skaters for playing more).
+        # Pos is carried through from the newest file only (see above), so
+        # this mask is the same across all file indices.
+        goalie_mask = pd.Series(False, index=merged.index)
+        if "Pos" in merged.columns:
+            pos = merged["Pos"].astype(str).str.strip().str.lower()
+            goalie_mask = pos.str.startswith("g") | pos.str.contains("goal")
 
         if weight_by_games:
             # per-player series: multiply by gp for skaters, but not for goalies
             w = base_w * merged[gp_col]
             # where goalie_mask is True, revert to base_w (no gp multiplier)
             if goalie_mask.any():
-                # create a series of base_w values
-                scalar_series = pd.Series([base_w] * len(merged), index=merged.index)
-                w = w.where(~goalie_mask, scalar_series)
+                w = w.where(~goalie_mask, base_w)
         else:
             # scalar -> convert to series for consistent operations
             w = pd.Series([base_w] * len(merged), index=merged.index)
