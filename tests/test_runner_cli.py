@@ -2,9 +2,15 @@ import subprocess
 from pathlib import Path
 import sys
 
+# Locate the script relative to this test file (not the process cwd), so the
+# suite passes regardless of where `pytest` is invoked from.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RANK_PLAYERS = REPO_ROOT / 'scripts' / 'rank_players.py'
+
+
 def test_help_shows_usage():
     # Ensure the script returns 0 for --help
-    p = subprocess.run([sys.executable, 'scripts/rank_players.py', '--help'], capture_output=True)
+    p = subprocess.run([sys.executable, str(RANK_PLAYERS), '--help'], capture_output=True)
     assert p.returncode == 0
     assert b'Usage' in p.stdout or b'usage' in p.stdout.lower()
 
@@ -24,6 +30,6 @@ def test_smoke_run_creates_csv(tmp_path):
 
     # run the script pointing at the synthetic file
     out_csv = tmp_path / 'ranked_players.csv'
-    p = subprocess.run([sys.executable, 'scripts/rank_players.py', '--input', str(file_path), '--out', str(out_csv)], capture_output=True)
+    p = subprocess.run([sys.executable, str(RANK_PLAYERS), '--input', str(file_path), '--out', str(out_csv)], capture_output=True)
     assert p.returncode == 0
     assert out_csv.exists()

@@ -10,6 +10,8 @@ python:
     
 install:
     - pip install -r requirements.txt
+    - pip install pytest
+    - pip install -e .
 
 script:
-    - echo "no tests"
+    - pytest
