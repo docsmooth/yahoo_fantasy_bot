@@ -9,53 +9,75 @@ Usage:
               the format.
 
 Options:
-  -a, --apply         Will apply the roster change in Yahoo.  Omitting this
-                      assumes a dry run of the roster change.
-  -y, --assumeyes     Answer yes for all of the roster moves.                    
-  -f, --full          Does a full analysis of the entire lineup meaning all
-                      players will be evaluated in an optimized lineup.  This
-                      can potentially add a lot of churn to your lineup.  The
-                      alternative is to just consider optimizing the open slots
-                      in the lineup and the bench.
-    -g, --generations=x Number of generations to do during lineup optimization.
-                      The more generations, the more combinations of lineups we
-                      will evaluate.
-    -r, --resetcache    Remove any cache files before starting program.  This is
-                      necessary if you changed the source of prediction stats in
-                      the config file.
-  -i, --ignorestatus  When constructing the lineup, ignore status other than IL.
-                      This will allow the bot to pick players that are DTD/NA
-                      for the starting lineup.
-    --score             Run the scoring script (`scripts/rank_players.py`) before
-                                            running the bot and make scored CSV available to the bot.
-    --rank-extra=<opts> Quoted options to pass to `scripts/rank_players.py`.
-    --input=<path>       Path to a single QuantHockey .xlsx file (overrides data discovery).
-    --sheet=<name>       Sheet name in the Excel file to read (default: QuantHockey).
-    --projected-games=<n>
+  -a, --apply           Will apply the roster change in Yahoo.  Omitting this
+                        assumes a dry run of the roster change.
+  -y, --assumeyes       Answer yes for all of the roster moves.
+  -f, --full            Does a full analysis of the entire lineup meaning all
+                        players will be evaluated in an optimized lineup.  This
+                        can potentially add a lot of churn to your lineup.  The
+                        alternative is to just consider optimizing the open
+                        slots in the lineup and the bench.
+  -g, --generations=x   Number of generations to do during lineup optimization.
+                        The more generations, the more combinations of lineups
+                        we will evaluate.
+  -r, --resetcache      Remove any cache files before starting program.  This
+                        is necessary if you changed the source of prediction
+                        stats in the config file.
+  -i, --ignorestatus    When constructing the lineup, ignore status other than
+                        IL.  This will allow the bot to pick players that are
+                        DTD/NA for the starting lineup.
+  --score               Run the scoring script before running the bot and make
+                        the scored CSV available to the bot.
+  --rank-extra=<opts>   Quoted extra arguments passed through to the scoring
+                        script.
+  --continue-on-score-failure
+                        If the scoring step fails, continue running the bot
+                        anyway instead of aborting (default: abort).
+  --input=<path>        Path to a single QuantHockey .xlsx file (overrides
+                        data discovery).
+  --sheet=<name>        Sheet name in the Excel file to read (default:
+                        QuantHockey).
+  --projected-games=<n>
                         Projected games to use for per-game scaling (e.g. 82).
-    --k=<k>              Shrinkage prior weight for empirical-Bayes (default: 20).
-    --decay=<d>         Decay factor to pass to scoring (float between 0 and 1).
-    --sort-by=<s>       How to sort input files for scoring: name|mtime.
-    --reverse           Reverse the discovered file order.
-    --goalie-method=<m> Goalies scoring method: stats|gp-fallback|constant. Overrides scoring default when --score is used.
-    --no-per-game       Disable per-game computation in scoring; useful when you want raw totals only.
-    --weight-by-games   Weight per-file contributions by games played (default behavior in rank_players).
-    --no-weight-by-games
-                        Do not weight per-file contributions by games played.
-    --normalize-file-weights
-                        Normalize per-file weights per-player so no single file dominates.
-    --yahoo-points-field=<f>
-                        Yahoo points field key to prefer when fetching Yahoo points (e.g. PPT).
-    --fuzzy-match=<n>   Enable fuzzy name matching threshold (0-100) when merging Yahoo points.
-    --fetch-yahoo       Attempt to fetch Yahoo points via API (requires --league-id and oauth file).
-    --league-id=<id>    Yahoo league id to use when fetching Yahoo points.
-    --oauth-file=<path> OAuth file path for Yahoo API (default: oauth2.json).
+  --k=<k>               Shrinkage prior weight for empirical-Bayes (default:
+                        20).
+  --decay=<d>           Decay factor to pass to scoring (float between 0 and
+                        1).
+  --sort-by=<s>         How to sort input files for scoring: season|name|mtime
+                        (default: season, since git does not preserve mtimes).
+  --reverse             Reverse the discovered file order.
+  --goalie-method=<m>   Goalies scoring method: stats, gp-fallback, or
+                        constant.  Overrides the scoring default when scoring
+                        is enabled.
+  --goalie-input=<path>  Path to a separate QuantHockey-style goalie export
+                        (columns include W/GA/SV/SO) used to score goalies
+                        for real instead of a fabricated GP-based estimate.
+  --goalie-sheet=<name>  Sheet name for --goalie-input (defaults to --sheet).
+  --goalie-header=<n>   Header row for --goalie-input (defaults to the same
+                        header row used for --input).
+  --no-per-game         Disable per-game computation in scoring; useful when
+                        you want raw totals only.
+  --weight-by-games     Weight per-file contributions by games played
+                        (default behavior in the scoring script).
+  --no-weight-by-games  Do not weight per-file contributions by games played.
+  --normalize-file-weights
+                        Normalize per-file weights per-player so no single
+                        file dominates.
+  --yahoo-points-field=<f>
+                        Yahoo points field key to prefer when fetching Yahoo
+                        points (e.g. PPT).
+  --fuzzy-match=<n>     Enable fuzzy name matching threshold (0-100) when
+                        merging Yahoo points.
+  --fetch-yahoo         Attempt to fetch Yahoo points via API (requires a
+                        league id and an oauth file).
+  --league-id=<id>      Yahoo league id to use when fetching Yahoo points.
+  --oauth-file=<path>   OAuth file path for Yahoo API (default: oauth2.json).
 
 """
 from docopt import docopt
-from yahoo_fantasy_bot import automation, oauth2_logger
 import logging
 import os
+import sys
 import pandas as pd
 import configparser
 import subprocess
@@ -65,7 +87,77 @@ import shlex
 pd.options.mode.chained_assignment = None  # default='warn'
 
 
+def build_score_command(args, out_path='scored_players.csv', script_dir=None):
+    """Build the subprocess argument list used to invoke the scoring script.
+
+    Kept as a standalone, importable function (no dependency on
+    yahoo_fantasy_bot.automation) so it can be unit tested without pulling in
+    yahoo_oauth/yahoo_fantasy_api.
+
+    NOTE: shelling out to scripts/rank_players.py is a partial mitigation.
+    The real fix is to import the scoring module in-process; tracked under
+    the CLI-surface epic yahoo_fantasy_bot-xfz.
+    """
+    if script_dir is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    rank_players_path = os.path.join(script_dir, 'rank_players.py')
+
+    cmd_parts = [sys.executable, rank_players_path, '--out', out_path]
+
+    # Map our first-class options to rank_players flags
+    # Value flags: forwarded as ['--flag', value] whenever the user passed
+    # a value. Each of these has a same-named counterpart in rank_players.py
+    # (kept in sync by hand; see tests/test_cli_contract.py for the
+    # anti-drift check -- yahoo_fantasy_bot-he4).
+    value_flags = [
+        '--input', '--sheet', '--projected-games', '--k', '--decay',
+        '--sort-by', '--goalie-method', '--goalie-input', '--goalie-sheet',
+        '--goalie-header', '--yahoo-points-field', '--fuzzy-match',
+        '--league-id', '--oauth-file',
+    ]
+    for flag in value_flags:
+        value = args.get(flag)
+        if value:
+            cmd_parts += [flag, value]
+
+    # Boolean (store_true) flags: forwarded as ['--flag'] only when true.
+    bool_flags = [
+        '--reverse', '--no-per-game', '--normalize-file-weights',
+        '--fetch-yahoo',
+    ]
+    for flag in bool_flags:
+        if args.get(flag):
+            cmd_parts += [flag]
+
+    # --weight-by-games / --no-weight-by-games are a pair backing a single
+    # argparse dest (default True) in rank_players.py. docopt gives us both
+    # as independent booleans, so we must resolve them ourselves: forward
+    # whichever one the user actually passed, forward neither if neither was
+    # passed, and refuse to silently pick one if the user passed both.
+    weight_by_games = args.get('--weight-by-games')
+    no_weight_by_games = args.get('--no-weight-by-games')
+    if weight_by_games and no_weight_by_games:
+        raise ValueError(
+            'Cannot pass both --weight-by-games and --no-weight-by-games'
+        )
+    elif weight_by_games:
+        cmd_parts += ['--weight-by-games']
+    elif no_weight_by_games:
+        cmd_parts += ['--no-weight-by-games']
+
+    # Extra params to append to the rank_players invocation
+    score_opts = args.get('--rank-extra') or ''
+    if score_opts:
+        cmd_parts += shlex.split(score_opts)
+
+    return cmd_parts
+
+
 if __name__ == '__main__':
+    # Imported lazily so that importing this script as a module (e.g. from
+    # tests) does not require yahoo_oauth/yahoo_fantasy_api to be installed.
+    from yahoo_fantasy_bot import automation, oauth2_logger
+
     args = docopt(__doc__, version='1.0')
 
     cfg = configparser.RawConfigParser(
@@ -91,43 +183,37 @@ if __name__ == '__main__':
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    auto = automation.Driver(cfg, not args['--apply'], args['--full'],
-                             not args['--assumeyes'], args['--resetcache'],
-                             args['--ignorestatus'])
-    # Optionally run the scoring script and expose the scored CSV to the bot
+    # Optionally run the scoring script and expose the scored CSV to the bot.
+    # This runs before automation.Driver(...) is constructed so that (a) cfg
+    # is fully populated before the bot reads it, and (b) a scoring failure
+    # is caught before we pay for a Yahoo round-trip.
     if args.get('--score'):
         # default output
         out_path = 'scored_players.csv'
 
-        # Build argument list for rank_players.py. Prefer explicit flags.
-        cmd_parts = [os.environ.get('PYTHON', 'python'), 'scripts/rank_players.py', '--out', out_path]
+        cmd_parts = build_score_command(args, out_path)
 
-        # Map our new first-class options to rank_players flags
-        if args.get('--goalie-method'):
-            cmd_parts += ['--goalie-method', args.get('--goalie-method')]
-        if args.get('--sort-by'):
-            cmd_parts += ['--sort-by', args.get('--sort-by')]
-        if args.get('--reverse'):
-            cmd_parts += ['--reverse']
-        if args.get('--decay'):
-            cmd_parts += ['--decay', args.get('--decay')]
-        if args.get('--no-per-game'):
-            cmd_parts += ['--no-per-game']
+        print('Running scoring command:', ' '.join(cmd_parts))
+        try:
+            proc = subprocess.run(cmd_parts, check=True, capture_output=True)
+            print(proc.stdout.decode())
+            if not cfg.has_section('Scoring'):
+                cfg.add_section('Scoring')
+            cfg['Scoring']['scored_csv'] = out_path
+        except subprocess.CalledProcessError as e:
+            print('Scoring command failed:')
+            print(e.stdout.decode())
+            print(e.stderr.decode())
+            if not args.get('--continue-on-score-failure'):
+                sys.exit(
+                    'Aborting: the scoring step failed, so no scored CSV is '
+                    'available.  Re-run with --continue-on-score-failure to '
+                    'run the bot anyway without scored data.'
+                )
+            print('Continuing without scored data because '
+                  '--continue-on-score-failure was given.')
 
-            # Extra params to append to the rank_players invocation
-            score_opts = args.get('--rank-extra') or ''
-            if score_opts:
-                # Split and extend
-                cmd_parts += shlex.split(score_opts)
-
-            print('Running scoring command:', ' '.join(cmd_parts))
-            try:
-                proc = subprocess.run(cmd_parts, check=True, capture_output=True)
-                print(proc.stdout.decode())
-                cfg['Scoring'] = cfg.get('Scoring', {})
-                cfg['Scoring']['scored_csv'] = out_path
-            except subprocess.CalledProcessError as e:
-                print('Scoring command failed:')
-                print(e.stdout.decode())
-                print(e.stderr.decode())
+    auto = automation.Driver(cfg, not args['--apply'], args['--full'],
+                             not args['--assumeyes'], args['--resetcache'],
+                             args['--ignorestatus'])
     auto.run()
