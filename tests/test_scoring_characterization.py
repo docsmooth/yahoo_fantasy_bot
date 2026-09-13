@@ -158,11 +158,18 @@ def test_league_mean_is_skater_only_fix_chg(quanthockey_sample_df):
     out = scoring.score_dataframe(quanthockey_sample_df, k=20.0, projected_games=82)
 
     league_mean = out["league_mean_per_game"].iloc[0]
-    skater_only_mean = out.loc[~out["is_goalie"], "per_game"].mean()
+    skaters = out.loc[~out["is_goalie"] & (out["gp"] > 0)]
 
-    assert league_mean == pytest.approx(8.693730595437783)
-    assert skater_only_mean == pytest.approx(8.693730595437783)
-    assert league_mean == pytest.approx(skater_only_mean)
+    # yahoo_fantasy_bot-bq3 follow-up: the prior is now the GAMES-WEIGHTED
+    # pooled rate (total points / total games), not a simple average of
+    # per-game rates. A simple average lets a 1-game player vote as loudly as
+    # an 82-game player in the very prior we shrink toward.
+    pooled = skaters["raw_score"].sum() / skaters["gp"].sum()
+    assert league_mean == pytest.approx(pooled)
+
+    # Goalies are still excluded entirely (the original chg fix).
+    assert league_mean != pytest.approx(
+        out.loc[out["gp"] > 0, "raw_score"].sum() / out.loc[out["gp"] > 0, "gp"].sum())
 
     # Goalies genuinely don't move the value: rescoring with the goalie
     # rows' per_game forced non-zero (simulating what the OLD pre-fallback

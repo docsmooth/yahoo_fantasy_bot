@@ -33,7 +33,7 @@ def build_parser():
     p.add_argument("--sort-by", choices=['season', 'name', 'mtime'], default='season', help="How to sort discovered input files. 'season' (default) parses the season out of the filename (e.g. QuantHockey_2024-2025.xlsx) so ordering is reproducible across machines; falls back to 'mtime' with a warning if a filename doesn't parse. 'name' and 'mtime' are explicit opt-ins.")
     p.add_argument("--reverse", action='store_true', help="Reverse the resolved (newest-first) file order, in every --sort-by mode.")
     p.add_argument("--goalie-method", choices=['stats','gp-fallback','constant'], default='gp-fallback', help="Goalie projection method used ONLY as a fallback when no real goalie stats are available (see --goalie-input)")
-    p.add_argument("--goalie-input", default=None, help="Path to a separate QuantHockey-style goalie export (columns include W/GA/SV/SO) used to score goalies for real instead of fabricating a GP-based estimate (yahoo_fantasy_bot-fow)")
+    p.add_argument("--goalie-input", action='append', default=None, help="Path to a separate QuantHockey-style goalie export (columns include W/GA/SV/SO) used to score goalies for real instead of fabricating a GP-based estimate (yahoo_fantasy_bot-fow). Repeatable -- pass more than once for multi-season goalie data; the resulting files are ordered newest-first and combined with the same --decay weighting used for skater --input files (yahoo_fantasy_bot-7vr). When omitted entirely, goalie exports (QuantHockey-Goalies_*.xlsx-shaped files: W/GA/SV/SO columns, no Pos column) are auto-discovered from data/ alongside the skater files (yahoo_fantasy_bot-soj).")
     p.add_argument("--goalie-sheet", default=None, help="Sheet name for --goalie-input (defaults to --sheet)")
     p.add_argument("--goalie-header", type=int, default=None, help="Header row for --goalie-input (defaults to the same header row used for --input)")
     p.add_argument("--no-per-game", dest='compute_per_game', action='store_false', help="Disable per-game computations and use raw totals for projections")
@@ -52,6 +52,15 @@ def build_parser():
 
 _SEASON_RE = re.compile(r'(\d{4})-(\d{4})')
 
+# Filename hint only -- see classify_file() for why schema sniffing takes
+# priority (yahoo_fantasy_bot-soj: a goalie export's season-shaped filename
+# alone made it sort as the newest "skater" file and dominate rankings).
+_GOALIE_NAME_RE = re.compile(r'goalies', re.IGNORECASE)
+
+# Schema shapes for the two known QuantHockey export kinds.
+_SKATER_MARKER_COL = "Pos"
+_GOALIE_MARKER_COLS = ("W", "GA", "SV", "SO")
+
 
 def _parse_season_key(path):
     """Parse a sortable (start_year, end_year) key out of a filename like
@@ -62,31 +71,70 @@ def _parse_season_key(path):
     return (int(m.group(1)), int(m.group(2)))
 
 
-def resolve_input_files(args, data_dir=None):
-    """Resolve the ordered (newest-first) list of input files.
+def _classify_by_filename(path):
+    """Classify a file as 'skater' or 'goalie' by filename pattern alone.
+    Returns None if the filename doesn't match either known naming
+    convention. This is only a fallback/hint -- see classify_file()."""
+    stem = path.stem
+    if _GOALIE_NAME_RE.search(stem):
+        return "goalie"
+    if stem.lower().startswith("quanthockey"):
+        return "skater"
+    return None
 
-    Raises SystemExit(2) if an explicitly-passed --input does not exist.
+
+def classify_file(path, sheet_name, header=1):
+    """Classify a discovered .xlsx file as 'skater' or 'goalie'.
+
+    yahoo_fantasy_bot-soj: filename alone is too fragile -- a goalie export
+    named QuantHockey-Goalies_2025-2026.xlsx has a season-shaped filename
+    that sorted it as the newest "skater" file. This combines BOTH signals:
+
+    - Schema sniffing (peek at the sheet's columns) is authoritative
+      whenever the file can actually be read: a skater export has a 'Pos'
+      column and none of W/GA/SV/SO; a goalie export has W/GA/SV/SO and no
+      'Pos' column.
+    - Filename pattern is used as a fallback only -- when the file can't be
+      read (e.g. a placeholder used by tests that only exercise ordering
+      logic) or its schema doesn't clearly match either shape.
+    - A file matching NEITHER shape (by schema, when readable) NOR a known
+      filename pattern is a hard error naming the file and what was
+      expected, rather than being silently included in either list.
     """
-    if data_dir is None:
-        data_dir = Path("data")
+    cols = None
+    try:
+        cols = list(pd.read_excel(path, sheet_name=sheet_name, header=header, nrows=1).columns)
+    except Exception:
+        cols = None
 
-    if args.input:
-        input_path = Path(args.input)
-        if not input_path.exists():
-            sys.exit(
-                f"ERROR: --input path does not exist: {input_path}. "
-                f"Pass a valid path, or omit --input to discover files under "
-                f"{data_dir}/ instead."
-            )
-        return [input_path]
+    if cols is not None:
+        colset = set(cols)
+        has_pos = _SKATER_MARKER_COL in colset
+        has_goalie_stats = set(_GOALIE_MARKER_COLS).issubset(colset)
+        if has_goalie_stats and not has_pos:
+            return "goalie"
+        if has_pos and not has_goalie_stats:
+            return "skater"
 
-    if not (data_dir.exists() and data_dir.is_dir()):
-        return []
+    name_kind = _classify_by_filename(path)
+    if name_kind is not None:
+        return name_kind
 
-    paths = list(data_dir.glob("*.xlsx"))
-    if not paths:
-        return []
+    detail = f"columns found: {cols}" if cols is not None else "file could not be read as an .xlsx"
+    sys.exit(
+        f"ERROR: {path} does not match a known QuantHockey export shape -- "
+        f"expected either a SKATER export ('{_SKATER_MARKER_COL}' column "
+        f"present, no {'/'.join(_GOALIE_MARKER_COLS)} columns) or a GOALIE "
+        f"export ({'/'.join(_GOALIE_MARKER_COLS)} columns present, no "
+        f"'{_SKATER_MARKER_COL}' column). {detail}."
+    )
 
+
+def _order_paths_newest_first(paths, args):
+    """Apply --sort-by/--reverse to an already-filtered (single-kind) list
+    of paths and return them newest-first. Shared by resolve_input_files
+    and resolve_goalie_files so skater and goalie discovery order/print
+    identically (yahoo_fantasy_bot-7vr)."""
     sort_by = args.sort_by
     if sort_by == 'season':
         unparsed = [p for p in paths if _parse_season_key(p) is None]
@@ -119,6 +167,89 @@ def resolve_input_files(args, data_dir=None):
     return paths
 
 
+def resolve_input_files(args, data_dir=None):
+    """Resolve the ordered (newest-first) list of SKATER input files.
+
+    Raises SystemExit(2) if an explicitly-passed --input does not exist.
+
+    yahoo_fantasy_bot-soj: when discovering from data_dir, files are
+    classified via classify_file() and only those classified 'skater' are
+    returned here -- goalie exports (by schema and/or filename) are
+    excluded, see resolve_goalie_files().
+    """
+    if data_dir is None:
+        data_dir = Path("data")
+
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            sys.exit(
+                f"ERROR: --input path does not exist: {input_path}. "
+                f"Pass a valid path, or omit --input to discover files under "
+                f"{data_dir}/ instead."
+            )
+        return [input_path]
+
+    if not (data_dir.exists() and data_dir.is_dir()):
+        return []
+
+    paths = list(data_dir.glob("*.xlsx"))
+    if not paths:
+        return []
+
+    skater_paths = [p for p in paths if classify_file(p, args.sheet) == "skater"]
+    if not skater_paths:
+        return []
+
+    return _order_paths_newest_first(skater_paths, args)
+
+
+def resolve_goalie_files(args, data_dir=None):
+    """Resolve the ordered (newest-first) list of GOALIE input files
+    (yahoo_fantasy_bot-7vr).
+
+    - If --goalie-input was passed (repeatable), those exact paths are used
+      (each is a hard error if missing), ordered/weighted the same way
+      skater --input discovery is.
+    - Otherwise, goalie exports are auto-discovered from data_dir the same
+      way skater files are, via classify_file() -- so the operator does not
+      have to pass --goalie-input by hand just because the goalie exports
+      happen to be sitting in data/ (yahoo_fantasy_bot-soj).
+
+    Returns [] if there is nothing to resolve (no --goalie-input and no
+    goalie-shaped files discovered in data_dir).
+    """
+    if data_dir is None:
+        data_dir = Path("data")
+
+    if args.goalie_input:
+        resolved = []
+        for raw in args.goalie_input:
+            gp = Path(raw)
+            if not gp.exists():
+                sys.exit(
+                    f"ERROR: --goalie-input path does not exist: {gp}. "
+                    f"Pass a valid path, or omit --goalie-input to discover "
+                    f"goalie files under {data_dir}/ instead."
+                )
+            resolved.append(gp)
+        return _order_paths_newest_first(resolved, args)
+
+    if not (data_dir.exists() and data_dir.is_dir()):
+        return []
+
+    paths = list(data_dir.glob("*.xlsx"))
+    if not paths:
+        return []
+
+    goalie_sheet = args.goalie_sheet if args.goalie_sheet else args.sheet
+    goalie_paths = [p for p in paths if classify_file(p, goalie_sheet) == "goalie"]
+    if not goalie_paths:
+        return []
+
+    return _order_paths_newest_first(goalie_paths, args)
+
+
 def main(argv=None):
     p = build_parser()
     args = p.parse_args(argv)
@@ -127,6 +258,7 @@ def main(argv=None):
     if not files:
         print("No input files found in data/ and --input not provided.")
         return 2
+    goalie_files = resolve_goalie_files(args)
 
     order_label = "oldest-first" if args.reverse else "newest-first"
     print(f"Resolved file order ({order_label}, --sort-by {args.sort_by}) "
@@ -134,6 +266,13 @@ def main(argv=None):
     for idx, fpath in enumerate(files):
         weight = args.decay ** idx
         print(f"  [{idx}] {fpath}  weight={weight:.6g}")
+
+    if goalie_files:
+        print(f"Resolved goalie file order ({order_label}, --sort-by {args.sort_by}) "
+              f"and decay weights (decay={args.decay}):")
+        for idx, fpath in enumerate(goalie_files):
+            weight = args.decay ** idx
+            print(f"  [{idx}] {fpath}  weight={weight:.6g}")
 
     print("Scoring players from multiple files "
           f"(decay={args.decay}, weight_by_games={args.weight_by_games})...")
@@ -147,7 +286,7 @@ def main(argv=None):
         normalize_file_weights=args.normalize_file_weights,
         compute_per_game=args.compute_per_game,
         goalie_method=args.goalie_method,
-        goalie_input=args.goalie_input,
+        goalie_input=[str(p) for p in goalie_files] if goalie_files else None,
         goalie_sheet_name=args.goalie_sheet,
         goalie_header=args.goalie_header,
     )
@@ -205,13 +344,21 @@ def main(argv=None):
     # (yahoo_fantasy_bot-gl7), and goalie_stats_fabricated_f{idx} flags any
     # fabricated (non-real-stats) goalie estimate (yahoo_fantasy_bot-fow).
     default_cols = [c for c in ["Name", "Team", "Pos"] if c in scored.columns]
+    # goalie_gp/goalie_raw_score (yahoo_fantasy_bot-vlm): a single combined
+    # pair, not per-file _f0/_f1 suffixed, because they come straight from
+    # the (already decay-blended, see combine_goalie_files) goalie export --
+    # the same "already combined" convention as combined_shrunk_per_game
+    # etc. below. They surface a goalie's real GP/raw score even when the
+    # SKATER-file gp_f0/raw_score_f0 columns are 0.0 because this goalie
+    # wasn't a row in that particular season's skater file.
+    goalie_cols = [c for c in ["goalie_gp", "goalie_raw_score"] if c in scored.columns]
     suffixed_prefixes = (
         "gp_f", "raw_score_f", "shrunk_per_game_f", "projected_total_f",
         "yahoo_score_f", "goalie_stats_fabricated_f",
     )
     per_file_cols = [c for c in scored.columns if any(c.startswith(pre) for pre in suffixed_prefixes)]
     combined_cols = [c for c in ["combined_shrunk_per_game", "combined_projected_total", "combined_ranking_score"] if c in scored.columns]
-    cols = default_cols + per_file_cols + combined_cols
+    cols = default_cols + goalie_cols + per_file_cols + combined_cols
     scored.to_csv(out_path, columns=cols, index=False)
     print(f"Wrote ranked CSV to {out_path}")
 

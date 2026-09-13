@@ -269,7 +269,18 @@ def test_goalie_input_scores_matched_goalies_for_real_fow(
     # per_game should be derived from the real raw_score / gp (gp from the
     # main sheet, GP=63 for Vasilevski), not a fabricated GP-based constant.
     assert vasilevski["per_game"] == pytest.approx(expected_raw / 63)
-    assert vasilevski["shrunk_per_game"] == pytest.approx(vasilevski["per_game"])  # goalies exempt from shrink
+    # yahoo_fantasy_bot-bq3: goalies are shrunk too, toward the GOALIE mean.
+    # Vasilevski is a 63-GP starter, so shrinkage barely moves him, but it
+    # must move him *towards* the goalie mean rather than leaving the raw
+    # per-game rate untouched.
+    goalie_mean = vasilevski["goalie_league_mean_per_game"]
+    shrunk = vasilevski["shrunk_per_game"]
+    raw_pg = vasilevski["per_game"]
+    assert shrunk != pytest.approx(raw_pg), "goalies must no longer be exempt from shrinkage"
+    assert min(raw_pg, goalie_mean) <= shrunk <= max(raw_pg, goalie_mean)
+    # A 63-game sample against k=20 should stay much closer to his own rate
+    # than to the league mean.
+    assert abs(shrunk - raw_pg) < abs(shrunk - goalie_mean)
 
 
 def test_goalie_input_unmatched_goalie_still_fabricated_and_warns_fow(
