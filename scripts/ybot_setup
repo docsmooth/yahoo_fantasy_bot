@@ -31,6 +31,7 @@ import objectpath
 import json
 import os
 from yahoo_fantasy_api import oauth2_logger
+from yahoo_fantasy_bot import oauth
 from yahoo_fantasy_bot.oauth import OAuthCredentialsError, validate_oauth_file
 from jinja2 import Environment, PackageLoader
 
@@ -187,7 +188,13 @@ if __name__ == '__main__':
     print("Enter the year:")
     wizard.set_year(int(input()))
     print("")
-    lgs = wizard.fetch_leagues()
+    try:
+        lgs = wizard.fetch_leagues()
+    except RuntimeError as error:
+        access_error = oauth.yahoo_fantasy_read_access_error(error)
+        if access_error is not None:
+            os.sys.exit(str(access_error))
+        raise
     if len(lgs) == 0:
         print("You have not joined any leagues for that sport code.")
         os.sys.exit(-1)
