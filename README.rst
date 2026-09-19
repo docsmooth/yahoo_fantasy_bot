@@ -102,8 +102,11 @@ then saved in ``oauth2.json`` for all subsequent access.
 
 Do not create ``oauth2.json`` by copying the example file: its token fields are
 deliberate placeholders.  Start with ``ybot_setup -k <consumer key> -s
-<consumer secret> oauth2.json my.cfg``; it writes the consumer credentials,
-completes the authorization flow, and saves the access and refresh tokens.
+<consumer secret> --callback-uri <registered redirect URI> oauth2.json
+my.cfg``; it writes the consumer credentials, completes the authorization
+flow, and saves the access and refresh tokens. The callback URI must exactly
+match a URI registered in the Yahoo developer console; otherwise Yahoo may
+issue a token that cannot access Fantasy Sports resources.
 Commands that access Yahoo validate all required fields first and name any
 missing field without printing credential values.
 

@@ -4,7 +4,7 @@
 Setup a config file for use with ybot.py -- the Yahoo! fantasy bot
 
 Usage:
-  ybot_setup [-k <key> -s <secret>] <oauth_file> <cfg_file>
+  ybot_setup [-k <key> -s <secret> --callback-uri=<uri>] <oauth_file> <cfg_file>
 
   <oauth_file>       File to read/write the bearer token.  If this file does
                      not exist, then you must pass in the key and secret in
@@ -16,6 +16,9 @@ Options:
   -k, --key=key    The consumer key that Yahoo! gave out when the application
                    was registered.
   -s, --secret=s   The secret that pairs with the consumer key.
+  --callback-uri=uri
+                   Redirect URI registered with Yahoo. Required when the
+                   registered URI is not the yahoo_oauth default of ``oob``.
 
 The <cfg_file> argument is the name of the config file that it generates.  On
 successful completion, you can then pass this to the ybot.py command.  See
@@ -32,9 +35,10 @@ from jinja2 import Environment, PackageLoader
 
 
 class Wizard:
-    def __init__(self, oauth_file, key=None, secret=None):
+    def __init__(self, oauth_file, key=None, secret=None, callback_uri=None):
         self.key = key
         self.secret = secret
+        self.callback_uri = callback_uri
         self.oauth_file = oauth_file
         if not os.path.exists(oauth_file):
             self.oauth_json_gen()
@@ -56,6 +60,8 @@ class Wizard:
         creds = {}
         creds['consumer_key'] = self.key
         creds['consumer_secret'] = self.secret
+        if self.callback_uri:
+            creds['callback_uri'] = self.callback_uri
         with open(self.oauth_file, "w") as f:
             f.write(json.dumps(creds))
 
@@ -148,7 +154,8 @@ if __name__ == '__main__':
         if overwrite.lower() != 'yes':
             os.sys.exit(1)
 
-    wizard = Wizard(args['<oauth_file>'], args['--key'], args['--secret'])
+    wizard = Wizard(args['<oauth_file>'], args['--key'], args['--secret'],
+                    args['--callback-uri'])
     print("Available sport codes:")
     for c in wizard.get_sport_codes():
         print('  - {}'.format(c))
