@@ -83,3 +83,21 @@ def test_goalies_shrink_toward_goalie_mean_not_skater_mean():
     # on the goalie scale rather than collapsing onto the skater mean.
     backup = out.loc["Backup B", "shrunk_per_game"]
     assert abs(backup - goalie_mean) < abs(backup - skater_mean)
+
+
+def test_goalie_projection_uses_goalie_specific_horizon(
+    one_game_wonder_vs_starters,
+):
+    out = scoring.score_dataframe(one_game_wonder_vs_starters).set_index("Name")
+    goalie = out.loc["Starter A"]
+
+    assert goalie["projected_total"] == pytest.approx(
+        goalie["shrunk_per_game"] * 60
+    )
+
+    custom = scoring.score_dataframe(
+        one_game_wonder_vs_starters, goalie_projected_games=55
+    ).set_index("Name")
+    assert custom.loc["Starter A", "projected_total"] == pytest.approx(
+        custom.loc["Starter A", "shrunk_per_game"] * 55
+    )

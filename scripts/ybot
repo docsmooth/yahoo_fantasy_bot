@@ -39,6 +39,9 @@ Options:
                         QuantHockey).
   --projected-games=<n>
                         Projected games to use for per-game scaling (e.g. 82).
+  --goalie-projected-games=<n>
+                        Projected games to use for goalie per-game scaling
+                        (default: 60).
   --k=<k>               Shrinkage prior weight for empirical-Bayes (default:
                         20).
   --decay=<d>           Decay factor to pass to scoring (float between 0 and
@@ -110,7 +113,7 @@ def build_score_command(args, out_path='scored_players.csv', script_dir=None):
     # (kept in sync by hand; see tests/test_cli_contract.py for the
     # anti-drift check -- yahoo_fantasy_bot-he4).
     value_flags = [
-        '--input', '--sheet', '--projected-games', '--k', '--decay',
+        '--input', '--sheet', '--projected-games', '--goalie-projected-games', '--k', '--decay',
         '--sort-by', '--goalie-method', '--goalie-input', '--goalie-sheet',
         '--goalie-header', '--yahoo-points-field', '--fuzzy-match',
         '--league-id', '--oauth-file',

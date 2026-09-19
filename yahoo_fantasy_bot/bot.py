@@ -2,7 +2,7 @@
 
 from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
-from yahoo_fantasy_bot import roster, utils
+from yahoo_fantasy_bot import oauth, roster, utils
 import logging
 import pickle
 import os
@@ -105,7 +105,9 @@ class ManagerBot:
     def __init__(self, cfg, reset_cache, ignore_status):
         self.logger = logging.getLogger()
         self.cfg = cfg
-        self.sc = OAuth2(None, None, from_file=cfg['Connection']['oauthFile'])
+        oauth_file = cfg['Connection']['oauthFile']
+        oauth.validate_oauth_file(oauth_file)
+        self.sc = OAuth2(None, None, from_file=oauth_file)
         self.lg = yfa.League(self.sc, cfg['League']['id'])
         self.tm = self.lg.to_team(self.lg.team_key())
         self.tm_cache = utils.TeamCache(self.cfg, self.lg.team_key())

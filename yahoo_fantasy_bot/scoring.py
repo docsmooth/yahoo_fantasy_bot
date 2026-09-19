@@ -191,6 +191,7 @@ def score_dataframe(
     games_col_candidates: Optional[Iterable[str]] = None,
     k: float = 20.0,
     projected_games: int = 82,
+    goalie_projected_games: int = 60,
     compute_per_game: bool = True,
     goalie_method: str = "gp-fallback",
     weights: Optional[Mapping[str, float]] = None,
@@ -207,6 +208,8 @@ def score_dataframe(
     - k: shrinkage factor (higher -> more shrinkage toward league mean)
     - projected_games: number of games to project a full season (used when
       computing `projected_total`)
+    - goalie_projected_games: number of games to project a goalie season;
+      goalies play materially fewer games than skaters.
     - weights: optional weights override (see `DEFAULT_WEIGHTS`)
     - goalie_stats_df: optional separate QuantHockey-style goalie export
       (columns including W/GA/SV/SO) used to score goalie rows for real,
@@ -243,6 +246,8 @@ def score_dataframe(
       goalie stats (see yahoo_fantasy_bot-fow)
     """
     df = df.copy()
+    if projected_games <= 0 or goalie_projected_games <= 0:
+        raise ValueError("projected_games and goalie_projected_games must be positive")
     if games_col_candidates is None:
         games_col_candidates = _COLUMN_ALIASES["GP"]
 
@@ -494,8 +499,11 @@ def score_dataframe(
         # the raw (unshrunk) view available separately as
         # per_game_projection -- nothing is lost, it's just no longer the
         # default ranking basis.
-        df["per_game_projection"] = df["per_game"] * projected_games
-        df["projected_total"] = df["shrunk_per_game"] * projected_games
+        projection_horizon = df["is_goalie"].map(
+            lambda is_goalie: goalie_projected_games if is_goalie else projected_games
+        )
+        df["per_game_projection"] = df["per_game"] * projection_horizon
+        df["projected_total"] = df["shrunk_per_game"] * projection_horizon
         df["adjusted_total"] = df["shrunk_per_game"] * df["gp"]
 
         # Provide a final ranking value, default using projected_total
@@ -622,6 +630,7 @@ def score_multiple_files(
     normalize_file_weights: bool = False,
     key_name: str = "Name",
     projected_games: int = 82,
+    goalie_projected_games: int = 60,
     k: float = 20.0,
     compute_per_game: bool = True,
     goalie_method: str = "gp-fallback",
@@ -638,7 +647,8 @@ def score_multiple_files(
     - decay: multiplicative decay applied per file step (0<decay<=1). Newest file weight=1, next=decay, next=decay^2, ...
     - weight_by_games: if True multiply each file's contribution by games played for that player in that year
     - key_name: the player name column to join on (default 'Name')
-    - projected_games, k, weights: passed to internal `score_dataframe` calls
+    - projected_games, goalie_projected_games, k, weights: passed to internal
+      `score_dataframe` calls
     - goalie_input: optional path (str) OR list/tuple of paths (newest-first)
       to a separate QuantHockey-style goalie export (columns including
       W/GA/SV/SO) used to score goalie rows for real in every file
@@ -701,6 +711,7 @@ def score_multiple_files(
     if goalie_stats_df is not None and len(goalie_stats_df) > 0 and key_name in goalie_stats_df.columns:
         goalie_scored = score_dataframe(
             goalie_stats_df, k=k, projected_games=projected_games,
+            goalie_projected_games=goalie_projected_games,
             compute_per_game=compute_per_game, goalie_method=goalie_method,
             weights=weights, goalie_name_col=key_name,
             source_name="<goalie export>",
@@ -714,7 +725,9 @@ def score_multiple_files(
         except Exception as e:
             raise
         scored = score_dataframe(
-            df, k=k, projected_games=projected_games, compute_per_game=compute_per_game,
+            df, k=k, projected_games=projected_games,
+            goalie_projected_games=goalie_projected_games,
+            compute_per_game=compute_per_game,
             goalie_method=goalie_method, weights=weights,
             goalie_stats_df=goalie_stats_df, goalie_name_col=key_name,
             source_name=str(path),
@@ -875,7 +888,17 @@ def score_multiple_files(
     if nonzero.any():
         combined.loc[nonzero] = num.loc[nonzero] / denom.loc[nonzero]
     merged["combined_shrunk_per_game"] = combined.fillna(0.0)
-    merged["combined_projected_total"] = merged["combined_shrunk_per_game"] * projected_games
+    combined_projection_horizon = pd.Series(
+        projected_games, index=merged.index, dtype=float
+    )
+    if "Pos" in merged.columns:
+        combined_goalie_mask = (
+            merged["Pos"].astype(str).str.strip().str.lower().str.startswith("g")
+        )
+        combined_projection_horizon.loc[combined_goalie_mask] = goalie_projected_games
+    merged["combined_projected_total"] = (
+        merged["combined_shrunk_per_game"] * combined_projection_horizon
+    )
     merged["combined_ranking_score"] = merged["combined_projected_total"]
 
     # yahoo_fantasy_bot-vlm: goalies present ONLY in the goalie export (never

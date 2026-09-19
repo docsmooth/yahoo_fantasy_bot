@@ -100,6 +100,13 @@ access to the application.  It will give you a code, which you then paste back
 into the window running the setup wizard.  The bearer token that it generates is
 then saved in ``oauth2.json`` for all subsequent access.
 
+Do not create ``oauth2.json`` by copying the example file: its token fields are
+deliberate placeholders.  Start with ``ybot_setup -k <consumer key> -s
+<consumer secret> oauth2.json my.cfg``; it writes the consumer credentials,
+completes the authorization flow, and saves the access and refresh tokens.
+Commands that access Yahoo validate all required fields first and name any
+missing field without printing credential values.
+
 Follow the rest of the prompts in the setup wizard.  Upon completion it will
 write out a config file -- ``my.cfg`` in the example above.
 

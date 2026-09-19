@@ -202,13 +202,14 @@ def test_ranking_score_uses_shrunk_per_game_fix_t0p(quanthockey_sample_df):
     tests/test_scoring_fixes.py::test_ranking_score_real_data_parekh_vs_draisaitl_t0p.
     """
     out = scoring.score_dataframe(quanthockey_sample_df, k=20.0, projected_games=82)
+    projection_horizon = out["is_goalie"].map(lambda is_goalie: 60 if is_goalie else 82)
 
     assert (out["ranking_score"] == out["projected_total"]).all()
-    assert (out["projected_total"] == out["shrunk_per_game"] * 82).all()
+    assert (out["projected_total"] == out["shrunk_per_game"] * projection_horizon).all()
 
     # The raw (unshrunk) view is still available, just under a new name, and
     # is no longer what ranking_score/projected_total report.
-    assert (out["per_game_projection"] == out["per_game"] * 82).all()
+    assert (out["per_game_projection"] == out["per_game"] * projection_horizon).all()
 
     robidas = out.loc[out["Name"] == "Justin Robidas"].iloc[0]
     assert robidas["gp"] == 2
@@ -328,23 +329,28 @@ def test_score_multiple_files_combined_uses_shrunk_per_game(two_season_files):
     `ranking_score`/`projected_total` now (previously ranking_score used the
     raw per_game rate, so this test used to demonstrate a divergence between
     the per-file projected_total_f{idx} and shrunk_per_game_f{idx} that no
-    longer exists: projected_total_f{idx} == shrunk_per_game_f{idx} * 82 for
-    every file now, by construction).
+    longer exists: projected_total_f{idx} is shrunk_per_game_f{idx} times the
+    position-specific projection horizon for every file, by construction).
     """
     merged = scoring.score_multiple_files(
         two_season_files, sheet_name="QuantHockey", header=1, decay=0.5,
         weight_by_games=True, projected_games=82,
     )
+    projection_horizon = merged["Pos"].astype(str).str.strip().str.lower().map(
+        lambda pos: 60 if pos.startswith("g") else 82
+    )
     pd.testing.assert_series_equal(
         merged["combined_projected_total"],
-        merged["combined_shrunk_per_game"] * 82,
+        merged["combined_shrunk_per_game"] * projection_horizon,
         check_names=False, rtol=1e-9,
     )
     assert (merged["combined_ranking_score"] == merged["combined_projected_total"]).all()
 
     # Confirm per-file projected_total is now shrunk-derived too.
     robidas = merged.loc[merged["Name"] == "Justin Robidas"].iloc[0]
-    assert robidas["projected_total_f0"] == pytest.approx(robidas["shrunk_per_game_f0"] * 82)
+    assert robidas["projected_total_f0"] == pytest.approx(
+        robidas["shrunk_per_game_f0"] * 82
+    )
 
 
 def test_score_multiple_files_empty_list_raises_fix_w2u():

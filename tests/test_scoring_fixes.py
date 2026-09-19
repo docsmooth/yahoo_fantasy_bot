@@ -27,8 +27,9 @@ def test_ranking_score_derives_from_shrunk_per_game_t0p(quanthockey_sample_df):
     a 2-GP call-up in this fixture).
     """
     out = scoring.score_dataframe(quanthockey_sample_df, k=20.0, projected_games=82)
+    projection_horizon = out["is_goalie"].map(lambda is_goalie: 60 if is_goalie else 82)
 
-    assert (out["projected_total"] == out["shrunk_per_game"] * 82).all()
+    assert (out["projected_total"] == out["shrunk_per_game"] * projection_horizon).all()
     assert (out["ranking_score"] == out["projected_total"]).all()
 
     robidas = out.loc[out["Name"] == "Justin Robidas"].iloc[0]
@@ -44,8 +45,9 @@ def test_per_game_projection_column_preserves_raw_view_t0p(quanthockey_sample_df
     shrunk estimate.
     """
     out = scoring.score_dataframe(quanthockey_sample_df, k=20.0, projected_games=82)
+    projection_horizon = out["is_goalie"].map(lambda is_goalie: 60 if is_goalie else 82)
     assert "per_game_projection" in out.columns
-    assert (out["per_game_projection"] == out["per_game"] * 82).all()
+    assert (out["per_game_projection"] == out["per_game"] * projection_horizon).all()
 
 
 @pytest.mark.skipif(not REAL_DATA_2024_25.exists(), reason="data/QuantHockey_2024-2025.xlsx not present")

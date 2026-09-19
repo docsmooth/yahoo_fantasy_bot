@@ -10,7 +10,7 @@ import time
 import subprocess
 import sys
 from datetime import datetime
-from yahoo_fantasy_bot import utils
+from yahoo_fantasy_bot import oauth, utils
 import os
 
 try:
@@ -106,6 +106,10 @@ def main():
     p.add_argument('--resolve-names', action='store_true', help='Resolve player IDs to names via Yahoo player_details()')
     args = p.parse_args()
 
+    try:
+        oauth.validate_oauth_file(args.oauth_file)
+    except oauth.OAuthCredentialsError as error:
+        p.error(str(error))
     sc = OAuth2(None, None, from_file=args.oauth_file)
 
     cache_dir = os.path.join('.cache')

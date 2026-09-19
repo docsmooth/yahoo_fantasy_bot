@@ -27,6 +27,7 @@ import yahoo_fantasy_api as yfa
 import json
 import os
 from yahoo_fantasy_api import oauth2_logger
+from yahoo_fantasy_bot.oauth import OAuthCredentialsError, validate_oauth_file
 from jinja2 import Environment, PackageLoader
 
 
@@ -59,6 +60,10 @@ class Wizard:
             f.write(json.dumps(creds))
 
     def oauth_setup(self):
+        try:
+            validate_oauth_file(self.oauth_file, require_tokens=False)
+        except OAuthCredentialsError as error:
+            raise RuntimeError(str(error))
         self.sc = OAuth2(None, None, from_file=self.oauth_file)
         if not self.sc.token_is_valid():
             self.sc.refresh_access_token()

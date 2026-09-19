@@ -54,6 +54,17 @@ def test_goalie_method_is_registered_and_takes_one_arg():
     assert args['--goalie-method'] == 'stats'
 
 
+def test_goalie_projected_games_is_registered_and_forwarded():
+    doc = _load_doc()
+    args = docopt.docopt(
+        doc, argv=['--score', '--goalie-projected-games', '55', 'my.cfg'])
+    assert args['--goalie-projected-games'] == '55'
+
+    mod = _load_ybot_module()
+    cmd = mod.build_score_command(args, script_dir='/repo/scripts')
+    assert cmd[cmd.index('--goalie-projected-games') + 1] == '55'
+
+
 def test_score_registered_exactly_once_with_no_argument():
     doc = _load_doc()
     opts = docopt.parse_defaults(doc)

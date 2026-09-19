@@ -19,6 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from yahoo_fantasy_bot import scoring
+from yahoo_fantasy_bot.oauth import OAuthCredentialsError, validate_oauth_file
 
 
 def build_parser():
@@ -28,6 +29,8 @@ def build_parser():
     p.add_argument("--out", default="ranked_players.csv")
     p.add_argument("--top", type=int, default=20)
     p.add_argument("--projected-games", type=int, default=82)
+    p.add_argument("--goalie-projected-games", type=int, default=60,
+                   help="Season horizon used for goalie projections (default: 60)")
     p.add_argument("--k", type=float, default=20.0, help="Shrinkage prior weight")
     p.add_argument("--decay", type=float, default=0.5, help="Decay factor for multi-file weighting (0<decay<=1)")
     p.add_argument("--sort-by", choices=['season', 'name', 'mtime'], default='season', help="How to sort discovered input files. 'season' (default) parses the season out of the filename (e.g. QuantHockey_2024-2025.xlsx) so ordering is reproducible across machines; falls back to 'mtime' with a warning if a filename doesn't parse. 'name' and 'mtime' are explicit opt-ins.")
@@ -282,6 +285,7 @@ def main(argv=None):
         decay=args.decay,
         weight_by_games=args.weight_by_games,
         projected_games=args.projected_games,
+        goalie_projected_games=args.goalie_projected_games,
         k=args.k,
         normalize_file_weights=args.normalize_file_weights,
         compute_per_game=args.compute_per_game,
@@ -299,6 +303,10 @@ def main(argv=None):
         # Lazy import to avoid requiring yahoo_oauth when not used
         from yahoo_oauth import OAuth2
         import yahoo_fantasy_api as yfa
+        try:
+            validate_oauth_file(args.oauth_file)
+        except OAuthCredentialsError as error:
+            p.error(str(error))
         print(f"Creating OAuth session from {args.oauth_file}...")
         sc = OAuth2(None, None, from_file=args.oauth_file)
         if not sc.token_is_valid():
