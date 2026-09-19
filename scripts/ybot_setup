@@ -85,7 +85,13 @@ class Wizard:
 
     def fetch_leagues(self):
         if self.leagues is None:
-            league_ids = self.gm.league_ids(year=self.year)
+            # Supplying ``year`` selects yahoo_fantasy_api's deprecated
+            # users;use_login=1/games/teams endpoint. The supported endpoint
+            # can filter the same result by sport and season.
+            league_ids = self.gm.league_ids(
+                game_codes=[self.sport_code],
+                seasons=[str(self.year)],
+            )
             self.leagues = []
             for league_id in league_ids:
                 # Older leagues have this "auto" in that, which we cannot dump

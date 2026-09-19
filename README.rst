@@ -88,10 +88,9 @@ credentials, and what league type it is.  There is a setup wizard that you can
 run that will get you a working config file for your league.
 
 Before you can run the setup wizard you will first need to request an API key
-from Yahoo! from: https://developer.yahoo.com/apps/create.  The process is
-quick.  New Yahoo apps receive read-only Fantasy access, which is sufficient for this
-project. Upon completion you will be given a
-consumer key and a consumer secret that you use with the setup wizard.
+from Yahoo! from: https://developer.yahoo.com/apps/create. The app console
+offers read-only Fantasy access for new apps. Upon completion you will be given
+a consumer key and a consumer secret that you use with the setup wizard.
 
 With key and secret, run the wizard like this:
 
@@ -121,6 +120,13 @@ missing field without printing credential values.
 
 Follow the rest of the prompts in the setup wizard.  Upon completion it will
 write out a config file -- ``my.cfg`` in the example above.
+
+The setup wizard uses Yahoo's supported read-only league-list endpoint,
+filtered by the selected sport and season. If Yahoo returns ``This application
+is not authorized to perform this action`` after issuing a token, the token
+exchange succeeded but Yahoo did not grant the app usable Fantasy Sports read
+access. There is no additional Fantasy OAuth scope to add to this command;
+contact Yahoo Developer support with the app's consumer key and that response.
 
 .. warning::
 
