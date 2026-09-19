@@ -121,7 +121,8 @@ missing field without printing credential values.
 Follow the rest of the prompts in the setup wizard.  Upon completion it will
 write out a config file -- ``my.cfg`` in the example above.
 
-The setup wizard uses Yahoo's supported read-only league-list endpoint,
+The setup wizard uses Yahoo's documented read-only league-list endpoint,
+``users;use_login=1/games;game_codes=<sport>;seasons=<year>/leagues``,
 filtered by the selected sport and season. If Yahoo returns ``This application
 is not authorized to perform this action`` after issuing a token, the token
 exchange succeeded but Yahoo did not grant the app usable Fantasy Sports read

@@ -27,6 +27,7 @@ ybot.py -h for usage.
 from docopt import docopt
 from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
+import objectpath
 import json
 import os
 from yahoo_fantasy_api import oauth2_logger
@@ -86,11 +87,15 @@ class Wizard:
     def fetch_leagues(self):
         if self.leagues is None:
             # Supplying ``year`` selects yahoo_fantasy_api's deprecated
-            # users;use_login=1/games/teams endpoint. The supported endpoint
-            # can filter the same result by sport and season.
-            league_ids = self.gm.league_ids(
-                game_codes=[self.sport_code],
-                seasons=[str(self.year)],
+            # users;use_login=1/games/teams endpoint. Its alternate
+            # league_ids path puts collection filters in query parameters,
+            # but Yahoo documents filters as semicolon resource parameters.
+            uri = (
+                "users;use_login=1/games;game_codes={};seasons={}/leagues"
+            ).format(self.sport_code, self.year)
+            leagues_response = self.gm.yhandler.get(uri)
+            league_ids = list(
+                objectpath.Tree(leagues_response).execute("$..league_key")
             )
             self.leagues = []
             for league_id in league_ids:
