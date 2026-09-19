@@ -8,7 +8,7 @@
             "type": "command"
           }
         ],
-        "matcher": ""
+        "matcher": "*"
       }
     ],
     "SessionStart": [
@@ -19,7 +19,7 @@
             "type": "command"
           }
         ],
-        "matcher": ""
+        "matcher": "*"
       }
     ]
   }
