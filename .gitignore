@@ -12,6 +12,8 @@ anaconda-project-local.yml
 *.log
 .ropeproject
 ranked_players.csv
+scored_players.csv
+logs/
 *.cfg
 tags
 .vscode/
