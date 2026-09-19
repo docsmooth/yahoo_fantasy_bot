@@ -2,18 +2,18 @@
 Yahoo! Fantasy Bot
 ==================
 
-A bot that can act as a manager in a Yahoo! fantasy league.
+A read-only assistant for a Yahoo! fantasy league.
 
 Are you in a Yahoo! fantasy league with inactive managers?  Do you face teams
 that start players on the IR, and have been for weeks?  Or do you need a few
 more teams in your league?  This program helps alleviate that pain by
-intelligently managing a Yahoo! fantasy team.  It can optimize the lineup,
+intelligently analyzing a Yahoo! fantasy team.  It can optimize a recommended lineup,
 taking into consideration available players in the free agent pool.  Adjust the
 IR and bench spots to account for star players that are a little banged up.
-Approve or reject trades that are made to the team.  It does all of this by
-talking directly to Yahoo! without having to enter the transactions manually.
-You just run the program whenever you need to set up the lineup, which takes
-only a few minutes to run.
+Evaluate proposed trades and recommend roster changes. It reads Yahoo data but
+never changes Yahoo state; enter any recommended transactions manually. You
+just run the program whenever you need to plan the lineup, which takes only a
+few minutes to run.
 
 Which tool do I want?
 ---------------------
@@ -23,7 +23,7 @@ The repo ships several entry points.  They do different jobs:
 ======================  ==============================================  ================
 Tool                    What it does                                    When you use it
 ======================  ==============================================  ================
-``ybot``                Sets your lineup, IL and trades in Yahoo!       In-season, daily
+``ybot``                Recommends lineup, IL and trade decisions       In-season, daily
 ``ybot_setup``          One-time OAuth + config wizard                  First run only
 ``rank_players.py``     Ranks a draft pool from QuantHockey data        Before a draft
 ``draft_watcher.py``    Tails a live draft, notifies on each pick       During a draft
@@ -37,6 +37,11 @@ scripts is tracked as an open issue.
 
 Restrictions
 ------------
+
+Yahoo Fantasy write operations are deliberately disabled. This accommodates
+new Yahoo OAuth applications, which receive read-only Fantasy access. ``ybot``
+still performs roster analysis and prints dry-run recommendations, but it
+cannot apply roster changes or accept/reject trades.
 
 This program will only optimize lineups for teams in a Yahoo! Head-to-Head
 league.  It only works for teams in mlb or nhl leagues.
@@ -84,8 +89,8 @@ run that will get you a working config file for your league.
 
 Before you can run the setup wizard you will first need to request an API key
 from Yahoo! from: https://developer.yahoo.com/apps/create.  The process is
-quick.  You will want to request read and write access, since we need write
-access to make changes to your roster.  Upon completion you will be given a
+quick.  New Yahoo apps receive read-only Fantasy access, which is sufficient for this
+project. Upon completion you will be given a
 consumer key and a consumer secret that you use with the setup wizard.
 
 With key and secret, run the wizard like this:
@@ -133,10 +138,11 @@ command:
 
   ybot <cfg_file>
 
-The script will choose a lineup based on available spots in the lineup.  By
-default it is a dry run -- pass ``--apply`` to actually make the roster moves in
-Yahoo!.  There is also a prompt option that will confirm with you each time it
-is about to make a roster move.  To get the full help text use ``--help``.
+The script will choose a lineup based on available spots in the lineup and
+print its proposed moves. It is always a dry run: ``--apply`` is rejected
+before configuration, OAuth, or Yahoo API work begins. The prompt option has
+no effect on writes because no writes are permitted. To get the full help text
+use ``--help``.
 
 Example
 -------

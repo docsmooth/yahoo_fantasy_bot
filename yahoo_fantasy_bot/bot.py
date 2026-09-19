@@ -2,7 +2,7 @@
 
 from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
-from yahoo_fantasy_bot import oauth, roster, utils
+from yahoo_fantasy_bot import oauth, roster, utils, read_only
 import logging
 import pickle
 import os
@@ -109,6 +109,7 @@ class ManagerBot:
         oauth.validate_oauth_file(oauth_file)
         self.sc = OAuth2(None, None, from_file=oauth_file)
         self.lg = yfa.League(self.sc, cfg['League']['id'])
+        read_only.protect_yahoo_handler(self.lg.yhandler)
         self.tm = self.lg.to_team(self.lg.team_key())
         self.tm_cache = utils.TeamCache(self.cfg, self.lg.team_key())
         self.lg_cache = utils.LeagueCache(self.cfg)
@@ -587,6 +588,8 @@ class ManagerBot:
         :param prompt: Prompt for yes before proceeding
         :type dry_run: bool
         """
+        if not dry_run:
+            raise read_only.ReadOnlyOperationError(read_only.READ_ONLY_MESSAGE)
         roster_chg = RosterChanger(self.lg, dry_run, self._get_orig_roster(),
                                    self.lineup, self.bench,
                                    self.injury_reserve, self.lg_statics.ir_name, prompt)
@@ -625,6 +628,8 @@ class ManagerBot:
         :param verbose: If true, we will print details to the console
         :return: Number of trades evaluated
         """
+        if not dry_run:
+            raise read_only.ReadOnlyOperationError(read_only.READ_ONLY_MESSAGE)
         trades = self.tm.proposed_trades()
         self.logger.info(trades)
         # We don't evaluate trades that we sent out.
@@ -772,6 +777,8 @@ class RosterChanger:
             return p.lower() == 'yes'
 
     def apply(self):
+        if not self.dry_run:
+            raise read_only.ReadOnlyOperationError(read_only.READ_ONLY_MESSAGE)
         self._calc_player_drops()
         self._calc_player_adds()
         self._sort_add_drops()

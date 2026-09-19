@@ -3,6 +3,8 @@
 A small utility that polls a Yahoo! fantasy league draft and notifies you as
 picks are made. Useful during a live draft, alongside the rankings produced by
 `scripts/rank_players.py` (see the main [README](README.rst)).
+It uses only read-only Yahoo Fantasy API calls and never changes draft or
+league state.
 
 ## Usage
 

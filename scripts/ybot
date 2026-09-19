@@ -9,8 +9,9 @@ Usage:
               the format.
 
 Options:
-  -a, --apply           Will apply the roster change in Yahoo.  Omitting this
-                        assumes a dry run of the roster change.
+  -a, --apply           Requests applying roster changes in Yahoo. This option
+                        is rejected because Yahoo Fantasy writes are disabled
+                        in read-only mode.
   -y, --assumeyes       Answer yes for all of the roster moves.
   -f, --full            Does a full analysis of the entire lineup meaning all
                         players will be evaluated in an optimized lineup.  This
@@ -157,11 +158,17 @@ def build_score_command(args, out_path='scored_players.csv', script_dir=None):
 
 
 if __name__ == '__main__':
-    # Imported lazily so that importing this script as a module (e.g. from
-    # tests) does not require yahoo_oauth/yahoo_fantasy_api to be installed.
-    from yahoo_fantasy_bot import automation, oauth2_logger
-
     args = docopt(__doc__, version='1.0')
+
+    if args['--apply']:
+        sys.exit(
+            'Yahoo Fantasy write operations are disabled: --apply cannot be '
+            'used because this application runs in read-only mode.'
+        )
+
+    # Imported after rejecting --apply so this path requires neither OAuth nor
+    # Yahoo API dependencies.
+    from yahoo_fantasy_bot import automation, oauth2_logger
 
     cfg = configparser.RawConfigParser(
         converters={'list': lambda x: [i.strip() for i in x.split(',')]}
