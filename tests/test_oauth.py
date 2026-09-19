@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from yahoo_fantasy_bot.oauth import OAuthCredentialsError, validate_oauth_file
+from yahoo_fantasy_bot.oauth import (
+    OAuthCredentialsError,
+    YahooFantasyReadAccessError,
+    validate_oauth_file,
+    yahoo_fantasy_read_access_error,
+)
 
 
 def _write_credentials(path, **overrides):
@@ -71,3 +76,23 @@ def test_validate_oauth_file_reports_invalid_json(tmp_path):
         validate_oauth_file(str(oauth_file))
 
     assert "not valid JSON" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "This application is not authorized to perform this action.",
+        'OAuth oauth_problem="additional_authorization_required"',
+    ],
+)
+def test_yahoo_read_access_denial_has_safe_actionable_remedy(response):
+    error = yahoo_fantasy_read_access_error(RuntimeError(response))
+
+    assert isinstance(error, YahooFantasyReadAccessError)
+    assert "Fantasy Sports - Read" in str(error)
+    assert "adding an OAuth scope" in str(error)
+    assert response not in str(error)
+
+
+def test_unrelated_runtime_error_is_not_translated_as_read_access_denial():
+    assert yahoo_fantasy_read_access_error(RuntimeError("Connection timed out")) is None

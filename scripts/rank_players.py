@@ -19,7 +19,11 @@ from pathlib import Path
 import pandas as pd
 
 from yahoo_fantasy_bot import scoring
-from yahoo_fantasy_bot.oauth import OAuthCredentialsError, validate_oauth_file
+from yahoo_fantasy_bot.oauth import (
+    OAuthCredentialsError,
+    validate_oauth_file,
+    yahoo_fantasy_read_access_error,
+)
 
 
 def build_parser():
@@ -311,10 +315,21 @@ def main(argv=None):
         sc = OAuth2(None, None, from_file=args.oauth_file)
         if not sc.token_is_valid():
             sc.refresh_access_token()
-        lg = yfa.League(sc, args.league_id)
-        names = scored['Name'].dropna().unique().tolist()
-        print(f"Fetching Yahoo points for {len(names)} players from league {args.league_id}...")
-        ydf = scoring.fetch_yahoo_points_for_names(lg, names, req_type='season', prefer_field=(args.yahoo_points_field or 'PPT'))
+        try:
+            lg = yfa.League(sc, args.league_id)
+            names = scored['Name'].dropna().unique().tolist()
+            print(f"Fetching Yahoo points for {len(names)} players from league {args.league_id}...")
+            ydf = scoring.fetch_yahoo_points_for_names(
+                lg,
+                names,
+                req_type='season',
+                prefer_field=(args.yahoo_points_field or 'PPT'),
+            )
+        except RuntimeError as error:
+            access_error = yahoo_fantasy_read_access_error(error)
+            if access_error is not None:
+                p.error(str(access_error))
+            raise
         # merge yahoo points into scored (match on Name)
         # optionally perform fuzzy matching when merging
         if args.fuzzy_match and args.fuzzy_match > 0.0:

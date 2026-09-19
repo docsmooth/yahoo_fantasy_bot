@@ -128,12 +128,24 @@ def main():
             lg = bot_inst.lg
             # try to reuse bot cache dir
             cache_dir = cfg['Cache'].get('dir', cache_dir)
-        except Exception as e:
-            notify_cli(f"Failed to instantiate ManagerBot: {e}")
+        except RuntimeError as error:
+            access_error = oauth.yahoo_fantasy_read_access_error(error)
+            if access_error is not None:
+                p.error(str(access_error))
+            notify_cli(f"Failed to instantiate ManagerBot: {error}")
+            lg = yfa.League(sc, args.league_id)
+        except Exception as error:
+            notify_cli(f"Failed to instantiate ManagerBot: {error}")
             # fall back to direct League
             lg = yfa.League(sc, args.league_id)
     else:
-        lg = yfa.League(sc, args.league_id)
+        try:
+            lg = yfa.League(sc, args.league_id)
+        except RuntimeError as error:
+            access_error = oauth.yahoo_fantasy_read_access_error(error)
+            if access_error is not None:
+                p.error(str(access_error))
+            raise
 
     # Setup a simple player details cache file
     cache_file = os.path.join(cache_dir, f'player_details-{args.league_id}.pkl')
@@ -146,8 +158,12 @@ def main():
         while True:
             try:
                 picks = lg.draft_results()
-            except Exception as e:
-                notify_cli(f"Error fetching draft_results: {e}")
+            except RuntimeError as error:
+                access_error = oauth.yahoo_fantasy_read_access_error(error)
+                if access_error is not None:
+                    notify_cli(str(access_error))
+                    return
+                notify_cli(f"Error fetching draft_results: {error}")
                 picks = []
 
             # picks are a list of dicts with keys like 'pick', 'round', 'team_key', 'player_id'

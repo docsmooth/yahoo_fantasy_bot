@@ -168,7 +168,7 @@ if __name__ == '__main__':
 
     # Imported after rejecting --apply so this path requires neither OAuth nor
     # Yahoo API dependencies.
-    from yahoo_fantasy_bot import automation, oauth2_logger
+    from yahoo_fantasy_bot import automation, oauth, oauth2_logger
 
     cfg = configparser.RawConfigParser(
         converters={'list': lambda x: [i.strip() for i in x.split(',')]}
@@ -223,7 +223,13 @@ if __name__ == '__main__':
             print('Continuing without scored data because '
                   '--continue-on-score-failure was given.')
 
-    auto = automation.Driver(cfg, not args['--apply'], args['--full'],
-                             not args['--assumeyes'], args['--resetcache'],
-                             args['--ignorestatus'])
-    auto.run()
+    try:
+        auto = automation.Driver(cfg, not args['--apply'], args['--full'],
+                                 not args['--assumeyes'], args['--resetcache'],
+                                 args['--ignorestatus'])
+        auto.run()
+    except RuntimeError as error:
+        access_error = oauth.yahoo_fantasy_read_access_error(error)
+        if access_error is not None:
+            sys.exit(str(access_error))
+        raise
