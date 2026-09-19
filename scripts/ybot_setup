@@ -42,6 +42,15 @@ class Wizard:
         self.oauth_file = oauth_file
         if not os.path.exists(oauth_file):
             self.oauth_json_gen()
+        elif self.callback_uri:
+            with open(oauth_file, encoding="utf-8") as credential_file:
+                credentials = json.load(credential_file)
+            if credentials.get("callback_uri") != self.callback_uri:
+                raise RuntimeError(
+                    "The existing OAuth file was authorized with a different "
+                    "callback URI. Move it aside and rerun ybot_setup so "
+                    "Yahoo can issue a token for the registered redirect URI."
+                )
         self.oauth_file = os.path.abspath(self.oauth_file)
         self.sc = None
         self.oauth_setup()

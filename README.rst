@@ -107,6 +107,10 @@ my.cfg``; it writes the consumer credentials, completes the authorization
 flow, and saves the access and refresh tokens. The callback URI must exactly
 match a URI registered in the Yahoo developer console; otherwise Yahoo may
 issue a token that cannot access Fantasy Sports resources.
+
+Changing ``--callback-uri`` does not modify an existing credential file or
+its tokens. Move the old ignored file aside and run setup again to authorize a
+new token for the new callback URI.
 Commands that access Yahoo validate all required fields first and name any
 missing field without printing credential values.
 
