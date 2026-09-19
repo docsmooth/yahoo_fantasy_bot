@@ -19,6 +19,8 @@ tags
 .vscode/
 locked_players.*
 exclude_players.*
+data/
+*.xlsx
 
 # Environments
 .env
