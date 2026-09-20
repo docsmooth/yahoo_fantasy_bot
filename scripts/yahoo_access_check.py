@@ -53,10 +53,18 @@ def post(url, data, headers):
         return e.code, e.read()
 
 
-def basic(key, secret):
+def token_auth(key, secret):
+    """Return (headers, extra_form_fields) for the token endpoint.
+
+    Confidential clients authenticate with HTTP Basic. Public clients have
+    no secret, so RFC 6749 s2.3 has them identify with client_id in the
+    request body instead.
+    """
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    if not secret:
+        return form, {"client_id": key}
     blob = base64.b64encode(f"{key}:{secret}".encode()).decode()
-    return {"Authorization": "Basic " + blob,
-            "Content-Type": "application/x-www-form-urlencoded"}
+    return {**form, "Authorization": "Basic " + blob}, {}
 
 
 def main():
@@ -75,22 +83,32 @@ def main():
         creds = json.load(open(args.oauth_file, encoding="utf-8"))
         key = key or creds.get("consumer_key")
         secret = secret or creds.get("consumer_secret")
-    if not key or not secret:
-        sys.exit("Need --key/--secret or an --oauth-file containing them.")
+    if not key:
+        sys.exit("Need --key or an --oauth-file containing consumer_key.")
+    public = not secret
     print(f"client_id: {key[:12]}... ({len(key)} chars), "
-          f"secret: {len(secret)} chars")
+          + ("PUBLIC client (no secret)" if public
+             else f"secret: {len(secret)} chars"))
 
     print("\n== Step 1: are the client credentials accepted? ==")
+    hdrs, extra = token_auth(key, secret)
     code, body = post(TOKEN, {"code": "probe", "grant_type":
                               "authorization_code",
-                              "redirect_uri": args.callback_uri},
-                      basic(key, secret))
+                              "redirect_uri": args.callback_uri, **extra},
+                      hdrs)
     text = body.decode(errors="replace")
     if "INVALID_AUTHORIZATION_CODE" in text:
         print("PASS - Yahoo authenticated the app; only the fake code failed.")
     else:
         print(f"FAIL - HTTP {code}: {text[:300]}")
-        print("      The consumer key/secret pair is wrong for this app.")
+        if "client secret cannot be empty" in text:
+            print("      This client is registered as a Confidential Client, "
+                  "so it requires --secret.")
+        elif public:
+            print("      Yahoo rejected body-based client_id auth. Confirm "
+                  "the app really is registered as a Public Client.")
+        else:
+            print("      The consumer key/secret pair is wrong for this app.")
         return
 
     print("\n== Step 2: is the callback URI registered? ==")
@@ -147,10 +165,11 @@ def main():
               f"-- you probably copied surrounding text.")
 
     t1 = time.time()
+    hdrs, extra = token_auth(key, secret)
     code, body = post(TOKEN, {"code": verifier, "grant_type":
                               "authorization_code",
-                              "redirect_uri": args.callback_uri},
-                      basic(key, secret))
+                              "redirect_uri": args.callback_uri, **extra},
+                      hdrs)
     text = body.decode(errors="replace")
     if code != 200:
         print(f"FAIL - HTTP {code}: {text[:400]}")
@@ -182,7 +201,7 @@ def main():
             "token_type": tokens["token_type"],
             "token_time": time.time(),
             "consumer_key": key,
-            "consumer_secret": secret,
+            **({"consumer_secret": secret} if secret else {}),
             "callback_uri": args.callback_uri,
         }
         with open(args.write, "w", encoding="utf-8") as fh:
