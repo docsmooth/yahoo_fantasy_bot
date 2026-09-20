@@ -89,9 +89,16 @@ def test_yahoo_read_access_denial_has_safe_actionable_remedy(response):
     error = yahoo_fantasy_read_access_error(RuntimeError(response))
 
     assert isinstance(error, YahooFantasyReadAccessError)
-    assert "Fantasy Sports - Read" in str(error)
-    assert "adding an OAuth scope" in str(error)
-    assert response not in str(error)
+    message = str(error)
+    # The entitlement is granted by Yahoo's approval process, not by the
+    # developer-console checkbox, so the remedy must point at the portal.
+    assert "https://sports.yahoo.com/developer/access/" in message
+    assert "does NOT provision access" in message
+    # Give the reader the two signals that distinguish a client-level refusal
+    # from a per-user consent problem.
+    assert "scope" in message
+    assert "/fantasy/v2/game/<code>" in message
+    assert response not in message
 
 
 def test_unrelated_runtime_error_is_not_translated_as_read_access_denial():

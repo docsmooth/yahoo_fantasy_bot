@@ -18,14 +18,31 @@ _YAHOO_READ_ACCESS_DENIALS = (
     "this application is not authorized to perform this action",
     "additional_authorization_required",
 )
+_YAHOO_FANTASY_ACCESS_PORTAL = "https://sports.yahoo.com/developer/access/"
 _YAHOO_READ_ACCESS_REMEDY = (
-    "Yahoo denied this Fantasy Sports read request. The OAuth token is valid, "
-    "but the app has not been granted usable Fantasy Sports read access. "
-    "Confirm that Fantasy Sports - Read is enabled for this app, then "
-    "re-authorize with a new OAuth file using the exact registered callback "
-    "URI. If Yahoo still denies access, contact Yahoo Developer support with "
-    "the app's consumer key and this authorization error; adding an OAuth "
-    "scope to this client will not grant the missing entitlement."
+    "Yahoo denied this Fantasy Sports request. The OAuth token is valid, but "
+    "the client has no Fantasy Sports entitlement attached to it.\n"
+    "\n"
+    "Yahoo gates the Fantasy Sports API behind a manual approval process. "
+    "Registering an app in the Yahoo Developer Network console and ticking "
+    "'Fantasy Sports - Read' does NOT provision access on its own; that "
+    "checkbox is not what grants the entitlement. Apply at "
+    f"{_YAHOO_FANTASY_ACCESS_PORTAL} and supply the Client ID you intend to "
+    "use, because approval is provisioned per client.\n"
+    "\n"
+    "To confirm this is the cause rather than a per-user consent problem:\n"
+    "  * A provisioned client's token response includes a 'scope' field "
+    "containing fspt-r. An unprovisioned client's token response has no "
+    "'scope' field at all.\n"
+    "  * An unprovisioned client is also refused on "
+    "/fantasy/v2/game/<code>, which is public game metadata needing no user "
+    "data. If that endpoint returns 403, the refusal is at the client level "
+    "and no amount of re-authorizing will change it.\n"
+    "\n"
+    "Note that Yahoo currently offers read access only; write access is not "
+    "available, so this is not a Read vs Read/Write misconfiguration. "
+    "Creating additional apps will not help and Yahoo's terms limit you to a "
+    "single developer account."
 )
 
 
